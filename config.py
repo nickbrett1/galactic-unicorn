@@ -71,9 +71,22 @@ FINAL_STRETCH_S = 30
 # Ambient clock (best-effort NTP; the countdown never touches the network)
 # ---------------------------------------------------------------------------
 
-WIFI_ENABLED = False
+# WiFi exists in phase 1 ONLY so the ambient clock can reach NTP. The countdown
+# is locally timed and never touches the network. With no credentials present
+# (the usual case) sync_ntp() skips immediately, so leaving this True is safe:
+# it costs nothing until config_secrets.py exists.
+WIFI_ENABLED = True
 NTP_HOST = "pool.ntp.org"
-UTC_OFFSET_S = 0
+
+# The first NTP query after association often fails (cold DNS/route, and
+# ntptime's own timeout is 1 s), so retry a few times before giving up.
+NTP_ATTEMPTS = 3
+NTP_RETRY_MS = 1000
+
+# Offset applied to UTC for the clock display. There is no timezone database on
+# the board, so this is a fixed offset and must be changed by hand at the DST
+# switch: Eastern is UTC-4 (EDT, summer) / UTC-5 (EST, winter).
+UTC_OFFSET_S = -4 * 3600  # EDT; use -5 * 3600 after the DST switch
 
 # ---------------------------------------------------------------------------
 # Secrets (gitignored; absent by default)

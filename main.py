@@ -74,9 +74,19 @@ def sync_ntp(log):
         import ntptime
 
         ntptime.host = config.NTP_HOST
-        ntptime.settime()
-        log(f"ntp: synced -> {time.localtime()}")
-        return True
+        # Retry: the FIRST query after association can time out - DNS/route are
+        # not warm yet, and ntptime's built-in timeout is only 1 s. Without this
+        # the clock silently degrades to the status pixel on a cold boot.
+        for attempt in range(1, config.NTP_ATTEMPTS + 1):
+            try:
+                ntptime.settime()
+                log(f"ntp: synced (attempt {attempt}) -> {time.localtime()}")
+                return True
+            except Exception as exc:  # noqa: BLE001 - retried below
+                log(f"ntp: attempt {attempt}/{config.NTP_ATTEMPTS} failed ({exc})")
+                time.sleep_ms(config.NTP_RETRY_MS)
+        log("ntp: gave up - ambient degrades to the status pixel")
+        return False
     # Blind except is deliberate: NTP is best-effort, and *any* failure must
     # degrade to the status pixel rather than take the display down.
     except Exception as exc:  # noqa: BLE001

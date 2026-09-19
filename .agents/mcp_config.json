@@ -1,0 +1,49 @@
+{
+  "mcpServers": {
+    "svelte": {
+      "serverUrl": "https://mcp.svelte.dev/mcp"
+    },
+    "memos": {
+      "serverUrl": "http://nas:5230/mcp"
+    },
+    "vikunja": {
+      "serverUrl": "http://nas:8086/"
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp"
+      ]
+    },
+    "fintechnick": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "npx -y mcp-remote https://www.fintechnick.com/api/mcp --header \"Authorization: Bearer $FINTECHNICK_MCP\""
+      ],
+      "env": {
+        "FINTECHNICK_MCP": "$FINTECHNICK_MCP"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_PERSONAL_ACCESS_TOKEN"
+      }
+    }
+  },
+  "security": {
+    "environmentVariableRedaction": {
+      "allowed": [
+        "NANOBANANA_GEMINI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY"
+      ]
+    }
+  }
+}

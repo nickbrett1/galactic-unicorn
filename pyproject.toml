@@ -3,12 +3,10 @@ name = "galactic-unicorn"
 version = "0.1.0"
 description = "A galactic-unicorn project generated with genproj"
 readme = "README.md"
-requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
     "ruff>=0.4"
 ]
 
@@ -16,11 +14,22 @@ dev = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# This is firmware, not a host package: MicroPython resolves modules from the
+# filesystem root and lib/. The setuptools config exists only so the
+# devcontainer's `pip install -e ".[dev]"` installs the lint tooling; it
+# deliberately packages nothing.
+[tool.setuptools]
+packages = []
 
 [tool.ruff]
-src = ["src", "tests"]
+# ruff lints the whole repository (run `ruff check .`), so firmware at the
+# root (main.py, config.py) and in lib/ is covered. `src` is only ruff's
+# first-party import resolver, not the set of files it checks.
+src = [".", "lib"]
+
+# The board runs MicroPython 1.19.1 (roughly CPython 3.4). py37 is ruff's
+# lowest supported target, so it is the floor, NOT a match: it rejects 3.8+
+# syntax (walrus, positional-only params, match) but still accepts 3.5-3.7
+# constructs (f-strings, async/await, variable annotations) that this board
+# may not parse. See the README section "Linting firmware".
+target-version = "py37"

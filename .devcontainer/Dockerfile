@@ -23,7 +23,7 @@ RUN curl -fsSL -o /tmp/tmux.tar.gz "https://github.com/tmux/tmux/releases/downlo
     && rm -rf /tmp/tmux.tar.gz /tmp/tmux-src
 USER vscode
 ENV USER_HOME_DIR=/home/vscode
-# The goose installer downloads the release tarball to the current working
+# The installers below download release tarballs to the current working
 # directory (curl --output <name>), which is '/' by default and not writable by
 # the non-root 'vscode' user -> "Failed to download" (curl exit 23). Run
 # vscode-user steps from a writable home directory.
@@ -36,8 +36,8 @@ RUN if [ -d "$HOME/.oh-my-zsh" ]; then rm -rf "$HOME/.oh-my-zsh"; fi \
     && git clone --depth=1 https://github.com/romkatv/powerlevel10k.git $HOME/.oh-my-zsh/custom/themes/powerlevel10k \
     && curl https://cursor.com/install -fsS | bash \
     && curl -fsSL https://antigravity.google/cli/install.sh | bash \
-    && mkdir -p "$HOME/.local/bin" \
-    && GOOSE_ARCH="$(uname -m | sed 's/arm64/aarch64/')" \
+    && mkdir -p "$HOME/.local/bin"
+RUN GOOSE_ARCH="$(uname -m | sed 's/arm64/aarch64/')" \
     && GOOSE_TAG="$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 https://api.github.com/repos/aaif-goose/goose/releases/latest | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p')" \
     && if [ -z "$GOOSE_TAG" ]; then echo "WARN: could not resolve latest goose tag; falling back to 'stable' release"; GOOSE_TAG=stable; fi \
     && GOOSE_URL="https://github.com/aaif-goose/goose/releases/download/${GOOSE_TAG}/goose-${GOOSE_ARCH}-unknown-linux-gnu.tar.bz2" \
@@ -49,7 +49,7 @@ RUN if [ -d "$HOME/.oh-my-zsh" ]; then rm -rf "$HOME/.oh-my-zsh"; fi \
     && "$HOME/.local/bin/goose" --version \
     && rm -rf /tmp/goose.tar.bz2 /tmp/goose-extract
 
-# Add local tools and goose to PATH for the non-root user
+# Put the locally installed tools on PATH for the non-root user
 ENV PATH="$USER_HOME_DIR/.local/bin:$PATH"
 
 RUN mkdir -p $HOME/.wrangler

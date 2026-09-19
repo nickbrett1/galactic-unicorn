@@ -453,8 +453,9 @@ _wt_remove() {
 }
 
 # --- Entry point: run goose inside this shell's worktree ---
-# If a Doppler wrapper already defined goose() above, it already routes through
-# _wt_ensure; otherwise bind the plain binary so worktree routing still applies.
-if ! typeset -f goose >/dev/null 2>&1; then
-  goose() { _wt_ensure command goose "$@"; }
-fi
+# Nothing is bound here: this block is only emitted into a devcontainer that
+# has goose at all, and goose() is already defined above as the Doppler wrapper
+# (GOOSE_ALIAS), which routes through _wt_ensure itself. Binding the bare
+# binary here, as this block used to do, is what produced a `goose` that
+# started and then died with "No provider configured" in a repo that selected
+# no agent capability (spec 012).

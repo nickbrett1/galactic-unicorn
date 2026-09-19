@@ -7,12 +7,11 @@ A galactic-unicorn project generated with genproj
 This project includes the following capabilities:
 
 - **Docker**: Adds Docker support for containerised builds and tooling.
-- **AI Coding Agents**: Sets up the AI coding agents in the devcontainer: goose (config, MCP servers and spec-first recipes) plus the Cursor and Antigravity CLIs.
-- **Container Agent**: Every generated devcontainer brings up and registers its own a2a-goose agent (`<repo>-dev`), reached over the tailnet by the LiteLLM proxy; reuses the a2a-goose GitHub release channel, so the container has the same self-update path as a host.
 - **Python DevContainer**: Sets up a VS Code DevContainer with Python environment.
 - **MicroPython board**: Adds the MicroPython board toolchain (mpremote) plus the USB passthrough plumbing needed to drive an RP2-series board (RP2040 or RP2350) from inside the devcontainer. OrbStack forwards the board's CDC-ACM REPL into the Linux VM automatically, but a container only sees it when the device is granted explicitly - this capability emits that grant and a port auto-detect helper. The container keeps the macOS node name (/dev/tty.usbmodem<serial>), which changes with the USB port, so the port is discovered at runtime. Note the grant is deliberately broad: OrbStack assigns the node a dynamic character major, and the device-cgroup-rule grammar accepts only a single major or '*', so scoping the grant to USB serial is not expressible - the container can open any host character device. Access is exclusive: while the container holds the port, host tools such as Thonny cannot open it.
 - **Ruff (Python code quality)**: Adds fast, zero-configuration Python linting with Ruff (rules live in pyproject.toml [tool.ruff]). Lint locally with `ruff check`. Requires a Python devcontainer.
 - **Doppler Secrets Management**: Integrates Doppler for secure secrets management. Enables the various MCP servers that rely on privileged tokens to access their services (e.g. CircleCI, GitHub, SonarQube).
+- **AI Coding Agents**: Sets up the AI coding agents in the devcontainer: goose (config, MCP servers and spec-first recipes) plus the Cursor and Antigravity CLIs.
 
 ## Setup
 
@@ -60,25 +59,6 @@ setup if resolution still mismatches. To force the correct context manually:
 unset DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT
 doppler setup --no-interactive --project common --config dev
 ```
-
-## The container's agent
-
-This devcontainer brings up its own `a2a-goose` agent, registered in the hub as
-`galactic-unicorn-dev` - one agent per repo, so a restart reclaims the same entry
-instead of adding a second one. Turns are billed through the LiteLLM proxy
-configured in Doppler (`LITELLM_BASE_URL`).
-
-```bash
-scripts/agent-dev.sh start    # write secrets + config, fetch the launcher, run it
-scripts/agent-dev.sh status   # running or not, the card URL, the log tail
-scripts/agent-dev.sh stop     # SIGTERM, wait for a clean deregister, confirm gone
-```
-
-`start` runs from the devcontainer's post-start hook, so the agent is normally
-already up when you arrive. It fails open: with no network on a first start it
-prints why it did not start and leaves the project usable. Secrets come from
-Doppler into `~/.config/a2a-goose/env` (mode 0600) and never into the image or
-`containerEnv`.
 
 ## MicroPython board
 

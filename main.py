@@ -14,7 +14,6 @@ import time
 
 import config
 from ambient import Ambient
-from sound import Audio
 from buttons import Buttons
 from display import (
     SWITCH_BRIGHTNESS_DOWN,
@@ -26,6 +25,7 @@ from display import (
     Display,
 )
 from routine import Engine
+from sound import Audio
 
 ROUTINES_PATH = "routines.json"
 LOOP_MS = 20

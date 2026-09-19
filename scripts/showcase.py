@@ -170,6 +170,9 @@ if RUN_TOUR:
     log("the thing to judge: with B the panel is a full-screen colour from the")
     log("brighter as it goes green. A is much quieter early - mostly dark,")
     log("one number, a thin bar. Decide which one you want living in the room.")
+    log("also watch for this in B: the number is cut out of the bar in black")
+    log("until the bar drains past it (~28% left), then flips to glowing in")
+    log("front of it. Is that flip a nice moment or a lurch?")
     print()
     for layout in ("A", "B"):
         print(f"--- LAYOUT {layout} ---")

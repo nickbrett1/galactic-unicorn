@@ -42,3 +42,9 @@ venv/
 
 
 
+
+# Firmware images (large; fetched from pimoroni/unicorn releases)
+*.uf2
+
+# Original stock Pimoroni demo pulled off the board (also in pimoroni/unicorn examples/)
+.board-backup/

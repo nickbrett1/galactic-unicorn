@@ -74,12 +74,12 @@ check("import display (module-name switch)", lambda: display_mod.__file__)
 check("geometry", lambda: f"{display_mod.WIDTH}x{display_mod.HEIGHT}")
 
 from ambient import Ambient
-from audio import Audio
+from sound import Audio
 from buttons import Buttons
 from display import Display, ramp_rgb
 from routine import Engine
 
-check("import ambient/audio/buttons/routine", lambda: "ok")
+check("import ambient/sound/buttons/routine", lambda: "ok")
 
 # -- construction -----------------------------------------------------------
 d = Display(config)

@@ -14,7 +14,7 @@ import time
 
 import config
 from ambient import Ambient
-from audio import Audio
+from sound import Audio
 from buttons import Buttons
 from display import (
     SWITCH_BRIGHTNESS_DOWN,

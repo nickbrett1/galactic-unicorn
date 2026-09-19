@@ -1,5 +1,10 @@
 """Synth helpers and the per-routine motifs.
 
+NOT called `audio.py`. MicroPython v1.29.0 (flashed 2026-09-19) ships a FROZEN
+`audio` module (I2S / WavPlayer), and sys.path is ['', '.frozen', '/lib'] -
+`.frozen` wins over `/lib`, so a `lib/audio.py` is silently shadowed and
+`from audio import Audio` raises ImportError. Do not rename this file back.
+
 No audio files: everything is generated with the board's synth, so a motif is
 a list of (frequency, seconds) pairs - cheap to add, cheap to change.
 

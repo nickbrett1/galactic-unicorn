@@ -1,6 +1,9 @@
 FROM mcr.microsoft.com/devcontainers/python
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends git socat curl gnupg nodejs npm openssh-server mosh micro libevent-dev libncurses-dev pkg-config bison build-essential xclip \
+    && curl -sLf --retry 3 --tlsv1.2 --proto "=https" 'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key' | gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" | tee /etc/apt/sources.list.d/doppler-cli.list \
+    && apt-get update && apt-get install -y doppler \
     && groupadd -f dialout \
     && usermod -aG dialout vscode
 

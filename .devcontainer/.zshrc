@@ -132,8 +132,57 @@ fi
 DISABLE_AUTO_UPDATE=true
 DISABLE_UPDATE_PROMPT=true
 
+# A robust function to run Antigravity with Doppler, ensuring no stale SonarQube containers exist.
+# Secrets are loaded from the 'common' project first, then the current project's secrets layer on
+# top (project-specific secrets take precedence over common ones).
+agy-dev() {
+  # Only check for Docker containers if Docker is installed
+  if command -v docker &> /dev/null; then
+    # Define the name of the container to check for
+    local container_name="sonarqube-mcp-server"
 
+    # Find the container ID using Docker's filter. The -q flag means "quiet" (ID only).
+    local container_id=$(docker ps -a -q --filter "name=${container_name}")
 
+    # Check if the container_id variable is not empty
+    if [ -n "$container_id" ]; then
+      echo "Found stale container '${container_name}' ($container_id). Removing it..."
+      # Force remove the container. The -f flag stops it if it's running.
+      docker rm -f "$container_id"
+    fi
+  fi
+
+  echo "Starting Antigravity with Doppler (common + common)..."
+  # Load common secrets first, then layer project-specific secrets on top.
+  # --forward-signals ensures SIGINT/SIGTERM are correctly passed through to agy.
+  doppler run --project common --config dev -- doppler run --forward-signals --project common --config dev -- agy "$@"
+}
+# A robust function to run goose with Doppler, ensuring all secrets are available.
+# Secrets are loaded from the 'common' project first, then the 'goose' project's secrets layer on
+# top (project-specific secrets take precedence over common ones).
+# Overrides the bare `goose` binary (which can't work standalone: it needs Doppler secrets).
+goose() {
+  echo "Starting goose with Doppler (common + goose)..."
+  # Doppler auth pre-flight: fail with actionable guidance instead of the cryptic
+  # "Doppler Error: you must provide a token" that 'doppler run' emits when the
+  # container has no Doppler auth (fresh devcontainer / codespace).
+  if ! command -v doppler &> /dev/null; then
+    echo "❌ Doppler CLI not found - goose needs Doppler secrets to start."
+    echo "   Finish the devcontainer post-create setup (it installs the CLI), then try again."
+    return 127
+  fi
+  if ! doppler whoami &> /dev/null 2>&1; then
+    echo "❌ Not authenticated with Doppler - goose needs Doppler secrets to start."
+    echo "   Run: bash scripts/cloud_login.sh   (interactive browser login)"
+    echo "   Or set a service token:  export DOPPLER_TOKEN=dp.st.<token>"
+    return 1
+  fi
+  # Load common secrets first, then layer goose project secrets on top.
+  # Uses 'prd' config for the goose project to pick up LITELLM endpoint env vars.
+  # --forward-signals ensures SIGINT/SIGTERM are correctly passed through to goose.
+  # Routes through _wt_ensure so goose runs in this shell's feature worktree.
+  _wt_ensure doppler run --project common --config dev -- doppler run --forward-signals --project goose --config prd -- goose "$@"
+}
 
 # Change directory to the workspace if starting in the home directory
 if [[ "$PWD" == "$HOME" ]]; then

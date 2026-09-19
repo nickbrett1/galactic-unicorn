@@ -55,6 +55,64 @@ else
     echo "INFO: /workspaces/galactic-unicorn/.devcontainer/.tmux.conf not found, skipping copy."
 fi
 
+echo "INFO: Ensuring doppler directory permissions..."
+mkdir -p "$USER_HOME_DIR/.doppler"
+sudo chown -R "$CURRENT_USER:$CURRENT_USER" "$USER_HOME_DIR/.doppler"
+# Round-5 (memo genproj-fixes-round5): guarantee the CLI is on PATH. The
+# Dockerfile installs it for fresh projects, but a regenerated project whose
+# Dockerfile was preserved (round-3 idempotent overwrite) needs the fallback.
+# (A devcontainer feature was tried first but ghcr.io/devcontainers-contrib
+# features are no longer reliably pullable — 'denied'.)
+if ! command -v doppler &> /dev/null; then
+    echo "INFO: Installing Doppler CLI (fallback)..."
+    (curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh || wget -t 3 -qO- https://cli.doppler.com/install.sh) | sudo sh
+fi
+# genproj-doppler-context-pin (memo Gi8CN7XqpH6CxFAc2YUJsK): ambient
+# DOPPLER_PROJECT/DOPPLER_CONFIG/DOPPLER_ENVIRONMENT from the launching session
+# override doppler.yaml (env > yaml) and silently point every 'doppler' command
+# at the wrong project. Pin the repo context in ~/.bashrc + ~/.zshrc so new
+# shells (including agent-spawned ones) inherit it. The marker keeps the
+# append idempotent across post-create re-runs.
+DOPPLER_RC_MARKER='# genproj-doppler-context-pin'
+if ! grep -qF "$DOPPLER_RC_MARKER" "$HOME/.bashrc" 2>/dev/null; then
+    cat >> "$HOME/.bashrc" <<'EOF'
+# genproj-doppler-context-pin: this repo's doppler.yaml context wins over ambient env
+export DOPPLER_PROJECT=common
+export DOPPLER_CONFIG=dev
+unset DOPPLER_ENVIRONMENT 2>/dev/null || true
+
+EOF
+    echo "INFO: Pinned doppler context (common/dev) in ~/.bashrc"
+fi
+if ! grep -qF "$DOPPLER_RC_MARKER" "$HOME/.zshrc" 2>/dev/null; then
+    cat >> "$HOME/.zshrc" <<'EOF'
+# genproj-doppler-context-pin: this repo's doppler.yaml context wins over ambient env
+export DOPPLER_PROJECT=common
+export DOPPLER_CONFIG=dev
+unset DOPPLER_ENVIRONMENT 2>/dev/null || true
+
+EOF
+    echo "INFO: Pinned doppler context (common/dev) in ~/.zshrc"
+fi
+# Apply to this shell too, then verify resolution is never silently wrong.
+export DOPPLER_PROJECT=common
+export DOPPLER_CONFIG=dev
+unset DOPPLER_ENVIRONMENT 2>/dev/null || true
+if command -v doppler &> /dev/null && doppler whoami &> /dev/null 2>&1; then
+    RESOLVED_PROJECT="$(doppler run -- printenv DOPPLER_PROJECT 2>/dev/null | tail -n 1)"
+    if [ -n "$RESOLVED_PROJECT" ] && [ "$RESOLVED_PROJECT" != "common" ]; then
+        echo "WARNING: 'doppler run' resolves project '$RESOLVED_PROJECT', but doppler.yaml"
+        echo "         declares 'common'. An ambient DOPPLER_* export is overriding"
+        echo "         the repo context. Run: unset DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT"
+        echo "         then 'doppler setup --no-interactive --project common --config dev'."
+    elif [ -z "$RESOLVED_PROJECT" ]; then
+        echo "WARNING: could not resolve the doppler project via 'doppler run'. If"
+        echo "         'doppler projects get common' 404s, create it and run"
+        echo "         'doppler setup --no-interactive --project common --config dev'."
+    else
+        echo "INFO: doppler context verified: common/dev"
+    fi
+fi
 
 
 
@@ -114,6 +172,56 @@ echo "INFO: Setting up MicroPython board toolchain..."
 echo "INFO: Configuring git safe directory..."
 git config --global --add safe.directory /workspaces/galactic-unicorn
 
+
+echo "INFO: Configuring GitHub auth over SSH (no PAT)..."
+# genproj-github-auth (SSH-first): GitHub remotes authenticate via an SSH key
+# supplied by the host bind-mount (~/.ssh) or the forwarded SSH agent. No PAT
+# is ever written to ~/.gitconfig or remote URLs. Defaults to SSH; fails loud
+# with guidance if no working key/agent is found. Idempotent: re-runs must not
+# duplicate or clobber the existing rewrite.
+
+# --- 1. Make a usable key for the container user ---------------------------
+# The host ~/.ssh is bind-mounted at $HOME/.ssh. Those files keep the host uid
+# (macOS 501), which OpenSSH (running as the container uid, typically 1000)
+# refuses to use. We never chown the mount (that mutates the host file).
+# Preferred: forward the SSH agent (zero keys on disk). Fallback: copy the
+# mounted key into a container-owned dir with mode 600.
+KEY_COPIED=""
+if [ -n "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add &> /dev/null && ssh-add -l >/dev/null 2>&1; then
+    echo "INFO: GitHub auth via forwarded SSH agent (${SSH_AUTH_SOCK})."
+else
+    mkdir -p "$HOME/.genproj-ssh" && chmod 700 "$HOME/.genproj-ssh"
+    for KEY in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
+        if [ -r "$KEY" ]; then
+            DEST="$HOME/.genproj-ssh/$(basename "$KEY")"
+            cp "$KEY" "$DEST"
+            chmod 600 "$DEST"
+            KEY_COPIED="$DEST"
+            echo "INFO: Copied host-mounted key $KEY into $DEST."
+            break
+        fi
+    done
+fi
+
+# --- 2. Point git's ssh at the copied key (if any) -------------------------
+# Persisted in ~/.gitconfig (no secret involved), so it survives re-runs.
+if [ -n "$KEY_COPIED" ]; then
+    git config --global core.sshCommand "ssh -i $KEY_COPIED -o IdentitiesOnly=yes"
+fi
+
+# --- 3. Idempotent SSH insteadOf rewrite for github.com ---------------------
+if git config --global --get-regexp '^url\.git@github\.com:.*\.insteadof' >/dev/null 2>&1; then
+    echo "INFO: GitHub SSH rewrite already configured; leaving in place."
+elif ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -T git@github.com 2>&1 | grep -qi "successfully authenticated"; then
+    git config --global url."git@github.com:".insteadOf "https://github.com/"
+    echo "INFO: GitHub remotes now use SSH (git@github.com:)."
+else
+    echo "WARN: No working SSH key/agent found for github.com."
+    echo "      Add an SSH public key at https://github.com/settings/keys,"
+    echo "      load it on the host (ssh-add --apple-use-keychain), and"
+    echo "      rebuild/re-run this setup. HTTPS push/pull will use the"
+    echo "      default credential helper until then."
+fi
 
 
 echo "INFO: Installing git pre-commit hooks (lint-staged)..."
@@ -187,4 +295,6 @@ if ! pgrep -x tailscaled > /dev/null; then
     sudo start-stop-daemon --start --background --oknodo --pidfile /var/run/tailscaled.pid --make-pidfile --exec /usr/sbin/tailscaled -- --state=/var/lib/tailscale/tailscaled.state
 fi
 
-echo "INFO: Custom container setup script finished."
+echo -e "\nINFO: Custom container setup script finished."
+echo -e "\n⚠️  To complete cloud login, run:"
+echo "    cd /workspaces/galactic-unicorn && bash scripts/cloud_login.sh"

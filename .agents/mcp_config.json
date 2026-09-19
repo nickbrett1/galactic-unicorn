@@ -27,14 +27,21 @@
       }
     },
     "github": {
-      "command": "npx",
+      "command": "doppler",
       "args": [
+        "run",
+        "--",
+        "npx",
         "-y",
         "@modelcontextprotocol/server-github"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "$GITHUB_PERSONAL_ACCESS_TOKEN"
-      }
+      ]
+    },
+    "doppler": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "DOPPLER_TOKEN=$(doppler configure get token --plain) npx -y @dopplerhq/mcp-server"
+      ]
     }
   },
   "security": {

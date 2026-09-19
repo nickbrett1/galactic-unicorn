@@ -12,6 +12,7 @@ This project includes the following capabilities:
 - **Python DevContainer**: Sets up a VS Code DevContainer with Python environment.
 - **MicroPython board**: Adds the MicroPython board toolchain (mpremote) plus the USB passthrough plumbing needed to drive an RP2-series board (RP2040 or RP2350) from inside the devcontainer. OrbStack forwards the board's CDC-ACM REPL into the Linux VM automatically, but a container only sees it when the device is granted explicitly - this capability emits that grant and a port auto-detect helper. The container keeps the macOS node name (/dev/tty.usbmodem<serial>), which changes with the USB port, so the port is discovered at runtime. Note the grant is deliberately broad: OrbStack assigns the node a dynamic character major, and the device-cgroup-rule grammar accepts only a single major or '*', so scoping the grant to USB serial is not expressible - the container can open any host character device. Access is exclusive: while the container holds the port, host tools such as Thonny cannot open it.
 - **Ruff (Python code quality)**: Adds fast, zero-configuration Python linting with Ruff (rules live in pyproject.toml [tool.ruff]). Lint locally with `ruff check`. Requires a Python devcontainer.
+- **Doppler Secrets Management**: Integrates Doppler for secure secrets management. Enables the various MCP servers that rely on privileged tokens to access their services (e.g. CircleCI, GitHub, SonarQube).
 
 ## Setup
 
@@ -25,6 +26,40 @@ This project includes the following capabilities:
 
 Firmware runs on the board, not on the host, so there is no host test step —
 see "MicroPython board" for flashing and running it.
+
+## Doppler
+
+This project uses Doppler for secrets from the shared `common` project
+(config `dev`) — no per-repo Doppler project is created. First use (links
+the shared project and `dev` config):
+
+```bash
+doppler setup --project common --config dev
+```
+
+If your repo needs app-specific secrets that shouldn't live in the shared
+`common` project, regenerate it with the doppler capability set to
+`projectStrategy: "new"` to get a dedicated project.
+
+The Doppler CLI is installed in the devcontainer — it must be on PATH for the
+VS Code extension and `doppler run` to work. Auth is persisted via the host
+`~/.doppler` bind-mount.
+
+### Env-var precedence (read this if `doppler run` hits the wrong project)
+
+Doppler resolves its target as **environment variables > `doppler.yaml` >
+`~/.doppler` scoped config**. If your shell — or the session that launched
+the devcontainer (e.g. an agent runtime) — exports `DOPPLER_PROJECT` /
+`DOPPLER_CONFIG` / `DOPPLER_ENVIRONMENT`, those silently override this
+repo's `doppler.yaml` and every `doppler` command targets the wrong
+project. The devcontainer's post-create setup pins this repo's context
+(`common`/`dev`) in `~/.bashrc` and `~/.zshrc` and warns at
+setup if resolution still mismatches. To force the correct context manually:
+
+```bash
+unset DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT
+doppler setup --no-interactive --project common --config dev
+```
 
 ## The container's agent
 

@@ -162,11 +162,18 @@ breathing status pixel, so a network problem looks "quiet", never "broken".
 
 Credentials live in `config_secrets.py`, which is **gitignored** and absent by
 default. **The source of truth is Doppler** (project `common`, config `dev`),
-so the secret survives a container rebuild — regenerate it with:
+so the secret survives a container rebuild. One command resolves it, pushes the
+whole firmware and restarts the board:
 
 ```bash
-./scripts/gen-secrets.sh        # writes config_secrets.py from Doppler
+./scripts/deploy.sh             # secrets + firmware + restart, one step
 ```
+
+(Secrets _only_: `./scripts/gen-secrets.sh`.)
+
+Why deploying is a host step: `config_secrets.py` runs **on the Pico W**, which
+has no `doppler` CLI, API token or TLS stack — Doppler can only be asked from
+the container.
 
 `config_secrets.example.py` is the committed shape of the file if you'd rather
 fill it in by hand.

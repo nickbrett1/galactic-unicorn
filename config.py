@@ -67,6 +67,16 @@ EXTEND_MINUTES = 2
 # Final stretch that pulses green and escalates.
 FINAL_STRETCH_S = 30
 
+# Which of the two candidate COUNTDOWN layouts (memo section 8) to render:
+#   "A" - big digits on the left, routine label top-right, full-width draining
+#         bar along the bottom two rows. (recommended)
+#   "B" - the whole background IS the bar: full 11-row height, draining
+#         left -> right, digits overlaid. More dramatic, and the screen
+#         literally becomes green as the bar empties.
+# Prototype both side by side with `scripts/showcase.py`, then set this once and
+# forget it - switching is a one-line change and needs no reflash of logic.
+COUNTDOWN_LAYOUT = "A"
+
 # ---------------------------------------------------------------------------
 # Ambient clock (best-effort NTP; the countdown never touches the network)
 # ---------------------------------------------------------------------------

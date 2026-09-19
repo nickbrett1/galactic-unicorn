@@ -269,6 +269,38 @@ def frame_cost():
 
 check("countdown frame rate", frame_cost)
 
+# -- countdown layouts (memo section 8: both candidates must render) --------
+def layout_b_renders():
+    engine.routine = engine._by_id("bathtime")
+    engine.total_ms = 5 * 60 * 1000
+    engine.state = "countdown"
+    config.COUNTDOWN_LAYOUT = "B"
+    try:
+        for frac in (1.0, 0.5, 0.1):
+            engine.state_started = time.ticks_ms()
+            engine.end_ticks = time.ticks_add(
+                time.ticks_ms(), int(engine.total_ms * frac)
+            )
+            engine.tick(time.ticks_ms())
+    finally:
+        config.COUNTDOWN_LAYOUT = "A"
+        engine.cancel(time.ticks_ms())
+    return "layout B drew at 100/50/10%"
+
+
+check("layout B (full-background bar) renders", layout_b_renders)
+
+
+def bg_bar_geometry():
+    w_full = digits.draw_bg_bar(d, 0, 0, d.width, d.height, 1.0, rgb=(0, 255, 48))
+    w_empty = digits.draw_bg_bar(d, 0, 0, d.width, d.height, 0.0, rgb=(0, 255, 48))
+    assert w_full == d.width, f"full bar is {w_full}, expected {d.width}"
+    assert w_empty == 0, f"empty bar is {w_empty}, expected 0"
+    return f"full={w_full} empty={w_empty}"
+
+
+check("draw_bg_bar spans the full width / empties to zero", bg_bar_geometry)
+
 d.clear()
 d.update()
 

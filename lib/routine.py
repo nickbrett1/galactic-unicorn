@@ -8,7 +8,7 @@ a broker. An MQTT blip (phase 2) is therefore invisible mid-countdown.
 import time
 
 import digits
-from display import ramp_rgb
+from display import BLACK, ramp_rgb
 
 AMBIENT = "ambient"
 PROMPT = "prompt"
@@ -200,8 +200,6 @@ class Engine:
 
         pen_rgb = _scale(rgb, pulse)
 
-        d.clear()
-
         # Digits: minutes normally, seconds in the last minute.
         if remaining > 60000:
             value = (remaining + 59999) // 60000
@@ -209,6 +207,23 @@ class Engine:
         else:
             value = (remaining + 999) // 1000
 
+        d.clear()
+        if self.config.COUNTDOWN_LAYOUT == "B":
+            self._render_countdown_b(remaining_s, total_s, value, pen_rgb)
+        else:
+            self._render_countdown_a(remaining_s, total_s, value, pen_rgb)
+        d.update()
+
+    def _countdown_ratio(self, remaining_s, total_s):
+        return remaining_s / total_s if total_s else 0.0
+
+    def _render_countdown_a(self, remaining_s, total_s, value, pen_rgb):
+        """Layout A (memo section 8, recommended).
+
+        Big digits on the left, routine label top-right, full-width draining
+        bar along the bottom two rows.
+        """
+        d = self.display
         digits.draw_number(d, 1, 0, 6, 9, 2, value, gap=2, rgb=pen_rgb)
 
         # Routine label top-right, dim - it is there for the parent.
@@ -217,10 +232,64 @@ class Engine:
         if lw <= d.width:
             d.text(label, d.width - lw - 1, 0, rgb=COUNTDOWN_LABEL_RGB, scale=1)
 
-        # Full-width draining bar along the bottom two rows.
-        ratio = remaining_s / total_s if total_s else 0.0
-        digits.draw_bar(d, 0, 9, d.width, 2, ratio, rgb=pen_rgb, bg_rgb=(6, 8, 12))
-        d.update()
+        digits.draw_bar(
+            d,
+            0,
+            9,
+            d.width,
+            2,
+            self._countdown_ratio(remaining_s, total_s),
+            rgb=pen_rgb,
+            bg_rgb=(6, 8, 12),
+        )
+
+    def _render_countdown_b(self, remaining_s, total_s, value, pen_rgb):
+        """Layout B (memo section 8, bolder): the whole background is the bar.
+
+        Full 11-row height, draining left -> right, with the digits overlaid.
+        The pen for each overlay is chosen by whether the bar still reaches it:
+        over the bar the glyphs are cut out in black (it is bright there at
+        every point on the ramp), and once the bar has drained past them they
+        take the ramp pen on the dark background. That keeps the number legible
+        at every ratio without a second colour grammar.
+        """
+        d = self.display
+        field_w = digits.draw_bg_bar(
+            d,
+            0,
+            0,
+            d.width,
+            d.height,
+            self._countdown_ratio(remaining_s, total_s),
+            rgb=pen_rgb,
+            dim_rgb=(6, 8, 12),
+        )
+
+        text = f"{int(value)}"
+        span = digits.number_width(len(text), 6, gap=2)
+        digits.draw_number(
+            d,
+            1,
+            0,
+            6,
+            9,
+            2,
+            value,
+            gap=2,
+            rgb=BLACK if field_w > 1 + span else pen_rgb,
+        )
+
+        label = self.routine.get("label", "")
+        lw = d.text_width(label, scale=1)
+        if lw <= d.width:
+            lx = d.width - lw - 1
+            d.text(
+                label,
+                lx,
+                0,
+                rgb=BLACK if field_w > lx + lw else COUNTDOWN_LABEL_RGB,
+                scale=1,
+            )
 
     def _render_handoff(self, now):
         d = self.display

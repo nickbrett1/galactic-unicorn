@@ -1,0 +1,41 @@
+{
+  "comment": "The routine table is config, not logic (memo section 5). Edit and reload without reflashing. The button binding is part of the config too, even though the physical labels are fixed.",
+  "buttons": {
+    "A": "bathtime",
+    "B": "booktime",
+    "C": "cleanup",
+    "D": "cancel"
+  },
+  "routines": [
+    {
+      "id": "bathtime",
+      "label": "Bathtime",
+      "kind": "lead-in",
+      "minutes": 5,
+      "button": "A",
+      "symbol": "duck",
+      "tune": "motif1",
+      "end_message": "BATHTIME!"
+    },
+    {
+      "id": "booktime",
+      "label": "Book time",
+      "kind": "lead-in",
+      "minutes": 5,
+      "button": "B",
+      "symbol": "book",
+      "tune": "motif2",
+      "end_message": "BOOK TIME!"
+    },
+    {
+      "id": "cleanup",
+      "label": "Cleanup",
+      "kind": "lead-in",
+      "minutes": 3,
+      "button": "C",
+      "symbol": "toy-box",
+      "tune": "motif3",
+      "end_message": "CLEAN UP!"
+    }
+  ]
+}

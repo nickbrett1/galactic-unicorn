@@ -197,6 +197,20 @@ def _get(url):
     # is the difference between a download and a reset mid-download. Measured:
     # an armed 8 s fuse killed a successful join's update with no output at all.
     _wdt_feed()
+    # Collect BEFORE the call, not after it. The handshake allocates its
+    # in/out buffers as single contiguous blocks, and the largest one this
+    # heap will hand out is 16 KB - so the second of those is what a
+    # fragmented heap refuses, and it refuses it as OSError(12) (ENOMEM)
+    # rather than MemoryError, because the allocation happens in C.
+    #
+    # Measured on the board, running the check from the render loop rather
+    # than from boot.py, where the heap is clean:
+    #   update: update check failed, keeping current firmware: OSError(12,)
+    # three times in a row, while the wifi line beside each one read
+    # status=3(up) - so the network was up and the heap was the whole problem.
+    # A collect immediately before the handshake made the same fetch succeed
+    # on its first attempt, with biggest_block at 16384.
+    gc.collect()
     response = urequests.get(url)
     _wdt_feed()
     if response.status_code != 200:

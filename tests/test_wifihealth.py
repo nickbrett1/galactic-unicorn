@@ -94,7 +94,11 @@ def case_header_per_boot():
         wifihealth.Watch(wlan, print, "0.1.13")
         wifihealth.Watch(wlan, print, "0.1.13")
         heads = [line for line in lines() if "=== boot" in line]
-        return report("a header is written on every boot", len(heads) == 2, f"headers={len(heads)}")
+        return report(
+            "a header is written on every boot",
+            len(heads) == 2,
+            f"headers={len(heads)}",
+        )
 
     return with_tmp("headers", body)
 

@@ -57,10 +57,10 @@ LOG_LIMIT = 8192
 
 # The names cyw43 reports, so a trace reads without a lookup table.
 STATUS_NAMES = {
-    0: "idle",     # interface down
-    1: "joined",   # associated to an AP, no IP yet
-    2: "no-ip",    # associated, DHCP unanswered  <- the failure window
-    3: "up",       # has an IP
+    0: "idle",  # interface down
+    1: "joined",  # associated to an AP, no IP yet
+    2: "no-ip",  # associated, DHCP unanswered  <- the failure window
+    3: "up",  # has an IP
 }
 
 # Distinct from every real status, so the first sample always reports.
@@ -90,9 +90,10 @@ class Watch:
             return
         self._next_sample = now
 
-        status, ip, rssi = self._read()
-        if status is None:
-            return  # the radio would not answer; that is not a status change
+        try:
+            status = self._wlan.status()
+        except Exception:  # noqa: BLE001 - a silent radio is not a change
+            return
 
         changed = status != self._status
         if not changed and time.ticks_diff(now, self._next_beat) < HEARTBEAT_MS:
@@ -102,37 +103,33 @@ class Watch:
 
         self._status = status
         self._next_beat = now
-        detail = ""
-        if ip:
-            detail += " ip=" + ip
-        if rssi:
-            detail += " rssi=" + rssi
+        # Everything that ALLOCATES happens here, on the way to a line that
+        # actually gets written - once per change, and otherwise once every
+        # HEARTBEAT_MS. Deliberately not once per sample: ifconfig() builds a
+        # tuple and four strings, and this runs at 1 Hz inside the render loop,
+        # which is the one place on this board where heap churn is expensive
+        # (see the ENOMEM note in updater._get - a fragmented heap is what makes
+        # the in-loop update check fail).
         note = "status" if changed else "steady status"
         self._line(
-            f"wifi: {self._stamp()} {note}={status}({STATUS_NAMES.get(status, '?')}){detail}"
+            f"wifi: {self._stamp()} {note}={status}({STATUS_NAMES.get(status, '?')})"
+            f"{self._detail()}"
         )
 
-    # --- the radio --------------------------------------------------------
-
-    def _read(self):
-        """(status, ip, rssi), or (None, "", "") if the radio will not answer."""
-        try:
-            status = self._wlan.status()
-        except Exception:  # noqa: BLE001 - a silent radio is not a status change
-            return None, "", ""
-        ip = ""
-        rssi = ""
+    def _detail(self):
+        """ " ip=... rssi=..." - only called when a line is about to be written."""
+        out = ""
         try:
             ip = self._wlan.ifconfig()[0]
-            if ip == "0.0.0.0":
-                ip = ""  # "no address" spelled as an address
+            if ip and ip != "0.0.0.0":  # "no address" spelled as an address
+                out += " ip=" + ip
         except Exception:  # noqa: BLE001, S110
             pass
         try:
-            rssi = str(self._wlan.status("rssi"))
+            out += " rssi=" + str(self._wlan.status("rssi"))
         except Exception:  # noqa: BLE001, S110 - not every port answers this
             pass
-        return status, ip, rssi
+        return out
 
     # --- the file ---------------------------------------------------------
 
@@ -146,7 +143,9 @@ class Watch:
         try:
             t = time.localtime()
             if t[0] >= 2024:
-                return f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d}T{t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
+                return (
+                    f"{t[0]:04d}-{t[1]:02d}-{t[2]:02d}T{t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
+                )
         except Exception:  # noqa: BLE001, S110
             pass
         return f"boot+{time.ticks_diff(time.ticks_ms(), self._started) // 1000}s"

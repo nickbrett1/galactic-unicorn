@@ -35,3 +35,23 @@ venv/
 
 
 
+
+# Device-local secrets. config.py is committed and holds no credentials;
+# WiFi lives in config_secrets.py, which never enters the repo (memo Appendix C).
+config_secrets.py
+
+# Ruff
+.ruff_cache/
+
+# Firmware images (large; fetched from pimoroni/unicorn releases)
+*.uf2
+
+# Original stock Pimoroni demo pulled off the board
+.board-backup/
+
+# Written on the device by lib/updater.py, never in the repo
+version.txt
+update.log
+
+# Python bytecode from the host-side harnesses
+__pycache__/

@@ -96,6 +96,23 @@ NTP_RETRY_MS = 1000
 UTC_OFFSET_S = -4 * 3600  # EDT; use -5 * 3600 after the DST switch
 
 # ---------------------------------------------------------------------------
+# Remote update (design memo: memos/CvaQ2nMNqaTvQbgYc8HJqW)
+# ---------------------------------------------------------------------------
+
+# Check the latest GitHub Release on every boot. Steady state is one small
+# HTTPS request; only a version change downloads anything. The update runs from
+# boot.py, BEFORE main.py, so a release that breaks main.py is repaired on the
+# next boot rather than leaving the board dead - which is also why boot.py and
+# lib/updater.py are excluded from the update itself.
+UPDATE_ENABLED = True
+
+# releases/latest/download/manifest.json is the one URL a device can fetch
+# without knowing the version. The pack is fetched from the same directory.
+UPDATE_MANIFEST_URL = (
+    "https://github.com/nickbrett1/galactic-unicorn/releases/latest/download/manifest.json"
+)
+
+# ---------------------------------------------------------------------------
 # Secrets (gitignored; absent by default)
 # ---------------------------------------------------------------------------
 

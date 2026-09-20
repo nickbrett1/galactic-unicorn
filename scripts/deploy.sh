@@ -21,8 +21,10 @@ port=$(scripts/find-board.sh)
 echo "deploy: board on ${port}"
 
 # 3. Push the firmware. `:lib` may already exist, so ignore mkdir's error.
+# boot.py first: it runs before main.py and is where the remote updater hooks
+# in. It is deliberately NOT in the update pack, so it only ever changes here.
 mpremote connect "$port" fs mkdir :lib 2>/dev/null || true
-mpremote connect "$port" fs cp config.py main.py routines.json :
+mpremote connect "$port" fs cp boot.py config.py main.py routines.json :
 mpremote connect "$port" fs cp config_secrets.py :
 mpremote connect "$port" fs cp lib/*.py :lib/
 

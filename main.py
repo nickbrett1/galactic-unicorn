@@ -99,7 +99,7 @@ def boot_banner(display, log):
     """BOOT / self-test. Also the phase-0 'hello' target."""
     log(f"BOOT {config.BOARD} / {config.CHIP}")
     display.set_brightness(config.BRIGHTNESS_COUNTDOWN)
-    msg = "hello"
+    msg = "hi there"
     width = display.text_width(msg, scale=1)
     for x in range(display.width, -width, -1):
         display.clear()

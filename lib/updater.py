@@ -506,6 +506,12 @@ def _update(config):
     version = manifest["version"]
     current = _local_version()
     if version == current:
+        # Logged rather than returned silently. A check that found nothing and a
+        # check that never ran looked identical in every log we have, and "the
+        # update did not land" is the single hardest thing to diagnose on this
+        # board - it has cost several sessions. One line per boot is a cheap
+        # price for being able to see the check happen.
+        _log("no update: " + version + " is already running")
         return False
     pack = manifest["pack"]
     size = _download(base + "/" + pack["file"], PACK_PATH, pack["sha256"])

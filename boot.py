@@ -23,5 +23,10 @@ try:
     import updater
 
     updater.run()
-except Exception as exc:  # noqa: BLE001 - must never stop main.py from running
+# BaseException, not Exception: a Ctrl-C from an attached mpremote (or a
+# brown-out) raises KeyboardInterrupt, which Exception does NOT catch - and an
+# interrupt during the updater's network phase would then abort the whole boot
+# and main.py would never run. That is rule 1 above being broken by the one
+# thing most likely to happen while someone is standing over the board.
+except BaseException as exc:  # noqa: BLE001
     print("boot: updater skipped:", repr(exc))

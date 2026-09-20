@@ -394,8 +394,7 @@ def _recover():
     if not _has_rollback():
         return False
     if _read(BOOT_TRY_FILE) != version:
-        _write(BOOT_TRY_FILE, version)
-        return False
+        return False  # has not had its chance yet
     previous = _rollback(version)
     _log(
         "rolled back from "
@@ -437,8 +436,40 @@ def _update(config):
     return True
 
 
+def _mark_attempt():
+    """Record that the running release has had its one chance at coming up.
+
+    Written at the very END of boot.py's work - once the update phase is over
+    and main.py is about to run - and never earlier. That ordering is
+    load-bearing: when this was written at the START of the boot, an interrupt
+    during the updater's network phase (which is most of boot.py's runtime, and
+    is exactly where an attached mpremote sends Ctrl-C) consumed the chance
+    without main.py ever being reached, and the next boot rolled a perfectly
+    good release back. Measured, on the board, v0.1.7 -> v0.1.6.
+    """
+    version = _read(VERSION_FILE)
+    if not version or not _has_rollback():
+        return  # protocol not engaged: never judge a tree we cannot put back
+    if _read(BOOT_OK_FILE) != version:
+        _write(BOOT_TRY_FILE, version)
+
+
 def run():
     """Called from boot.py. Never raises; returns True only if it applied an update."""
+    applied = False
+    try:
+        applied = _run()
+    finally:
+        # Whatever path _run took, boot.py is finishing and main.py is next, so
+        # THIS is the boot that counts as the release's chance to prove itself.
+        try:
+            _mark_attempt()
+        except Exception:  # noqa: BLE001, S110 - bookkeeping must not stop main.py
+            pass
+    return applied
+
+
+def _run():
     try:
         import config
 

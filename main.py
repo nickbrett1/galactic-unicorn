@@ -31,6 +31,14 @@ from display import (
 from routine import Engine
 from sound import Audio
 
+# Instrumentation, not machinery: main.py can be hand-deployed over USB without
+# it (lib/updater.py is deployed that way), so a missing module must degrade to
+# "no trace" rather than break the boot.
+try:
+    import wifihealth
+except ImportError:  # pragma: no cover - only on a hand-deployed tree
+    wifihealth = None
+
 ROUTINES_PATH = "routines.json"
 LOOP_MS = 20
 
@@ -208,6 +216,12 @@ def main():
     ambient = Ambient(display, config)
     ambient.ntp_ok = sync_ntp(log)
 
+    # Started AFTER sync_ntp so the trace's first status line is the state the
+    # app will actually run in, not the "idle" of a radio that has not been
+    # brought up yet. Its per-boot header goes down either way - that line is
+    # what makes a reset loop visible from the outside (see lib/wifihealth.py).
+    health = wifihealth.start(config, log, firmware_version()) if wifihealth else None
+
     buttons = Buttons(
         display,
         ALL_SWITCHES,
@@ -255,6 +269,12 @@ def main():
         # wedged anything else on this thread - hard-resets the board into
         # boot.py's recovery instead of leaving a frozen panel on the wall.
         watchdog.feed()
+        # One cheap look at the radio per second, written down where it survives
+        # the session. This is the instrument for the one thing we still cannot
+        # see from the outside: whether a DHCP failure leaves the board UP
+        # without an IP, or RESETTING (see lib/wifihealth.py).
+        if health is not None:
+            health.sample()
         # Retire the release's one chance only after the loop has demonstrably
         # kept feeding the fuse. A release that wedges here never gets this far,
         # so boot-ok.txt stays behind and boot.py rolls it back on the next

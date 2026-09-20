@@ -29,6 +29,20 @@ from display import (
 from routine import Engine
 from sound import Audio
 
+# ===========================================================================
+# DELIBERATELY BROKEN RELEASE - OTA self-heal drill. DO NOT KEEP.
+#
+# This release is *supposed* to break the app so the next boot can prove the
+# updater repairs it. boot.py runs BEFORE main.py, so the update path has to
+# keep working when this file cannot - that independence is the entire safety
+# story of the OTA design, and this is the release that measures it.
+#
+# A runtime failure rather than a SyntaxError, on purpose: CI runs
+# `ruff check .`, which would reject a SyntaxError, so the realistic bad
+# release is one that parses cleanly and then dies on the board.
+# ===========================================================================
+raise RuntimeError("deliberately broken release - OTA self-heal drill")
+
 ROUTINES_PATH = "routines.json"
 LOOP_MS = 20
 

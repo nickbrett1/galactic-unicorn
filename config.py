@@ -58,8 +58,9 @@ HANDOFF_MS = 10000
 
 # DEMO: compress every countdown to this many seconds, so the whole transition
 # can be watched quickly. 0 = use each routine's real `minutes` (normal use).
-# Set for the 2026-09-19 first look; set back to 0 afterwards.
-DEMO_SECONDS = 10
+# Was 10 for the 2026-09-19 first look; back to real time for the first
+# release. Handy to set again when iterating on the countdown.
+DEMO_SECONDS = 0
 
 # D cancels instantly in every active state (decision 11). Set D_CANCEL_HOLD_MS
 # above 0 to require a short hold instead - the recorded fallback if a toddler

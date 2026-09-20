@@ -188,7 +188,15 @@ def _get(url):
     """GET a URL and hand back the open response. Caller must close it."""
     import urequests
 
+    # DNS + TCP + the TLS handshake all happen inside urequests.get and none of
+    # it can feed the fuse, so do it on both sides of the call. This matters
+    # only when the fuse is already armed - which it is whenever boot.py runs
+    # after a SOFT reset, because an armed watchdog survives one - but there it
+    # is the difference between a download and a reset mid-download. Measured:
+    # an armed 8 s fuse killed a successful join's update with no output at all.
+    _wdt_feed()
     response = urequests.get(url)
+    _wdt_feed()
     if response.status_code != 200:
         code = response.status_code
         response.close()
@@ -199,7 +207,24 @@ def _get(url):
 def _get_text(url, limit=MANIFEST_LIMIT):
     response = _get(url)
     try:
-        return response.raw.read(limit).decode()
+        # Read in small pieces rather than in one `limit`-byte allocation. The
+        # manifest is well under a kilobyte, but `read(limit)` reserves the
+        # whole 16 KB up front and that single contiguous allocation is what a
+        # fragmented heap refuses first. Measured on the board, with the update
+        # driven from the REPL instead of from boot.py:
+        #   MemoryError('memory allocation failed, allocating 16384 bytes')
+        # and the join that preceded it had succeeded, so the window was real
+        # and the update was lost to the buffer, not the network.
+        gc.collect()
+        parts = []
+        total = 0
+        while total < limit:
+            chunk = response.raw.read(256)
+            if not chunk:
+                break
+            parts.append(chunk)
+            total += len(chunk)
+        return b"".join(parts).decode()
     finally:
         response.close()
 
@@ -287,6 +312,7 @@ def _unpack(files):
             digest = hashlib.sha256()
             with open(dest, "wb") as out:
                 while remaining > 0:
+                    _wdt_feed()
                     chunk = fh.read(min(CHUNK, remaining))
                     if not chunk:
                         raise ValueError("truncated pack (data)")
@@ -325,6 +351,9 @@ def _cleanup():
 
 def _apply(written, version):
     for rel in written:
+        # Renaming a file is fast, but `written` is the whole tree and this
+        # runs under whatever fuse is already armed, so feed per file.
+        _wdt_feed()
         os.rename(NEXT_DIR + "/" + rel, rel)
     # version.txt is written LAST: an interrupted apply re-runs the whole update
     # on the next boot rather than half-adopting it.
@@ -366,6 +395,7 @@ def _archive_current(version, managed):
     _rmtree(PREV_DIR)
     entries = []
     for path in managed:
+        _wdt_feed()
         try:
             with open(path, "rb") as fh:
                 data = fh.read()
@@ -395,6 +425,7 @@ def _rollback(failed):
     entries = info["files"]
     restored = set()
     for entry in entries:
+        _wdt_feed()
         with open(PREV_DIR + "/" + entry["path"], "rb") as fh:
             data = fh.read()
         if _hexdigest(hashlib.sha256(data)) != entry["sha256"]:

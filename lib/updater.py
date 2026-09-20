@@ -52,10 +52,17 @@ import time
 
 try:
     from watchdog import feed as _wdt_feed
-except ImportError:  # a tree without lib/watchdog.py: no fuse to feed
+    from watchdog import reset_was_watchdog as _reset_was_watchdog
+except ImportError:  # a tree without lib/watchdog.py: no fuse to feed, none to report
 
     def _wdt_feed():
         pass
+
+    def _reset_was_watchdog():
+        # Correct default, not a shrug: no lib/watchdog.py means no fuse was
+        # ever armed by this tree, so a watchdog reset cannot be its doing and
+        # _recover must not change its verdict on the strength of one.
+        return False
 
 VERSION_FILE = "version.txt"
 PACK_PATH = ":incoming.pack"
@@ -390,6 +397,22 @@ def _recover():
       boot-try == version  it has had that chance and still has not reported
                            in, so it never came up: put the previous tree back
 
+    "Comes up" is deliberately two separate claims, and boot-try being cleared
+    the moment boot-ok is honoured is what separates them:
+
+      the first boot    proves a release REACHES the point where main.py can
+                        write boot-ok
+      the first RESTART proves it STAYS ALIVE, because only then is boot-ok
+                        honoured and boot-try retired
+
+    That second claim needs evidence, and machine.reset_cause() supplies it: a
+    watchdog reset means the boot that wrote boot-ok got that far and then
+    stopped feeding, so it does not get to call itself healthy. Without this,
+    a version that wedges every boot wrote boot-ok on its way up and then reset
+    forever - the wedge protection turning "wedged forever" into "reset-loop
+    forever", which is not recovery. Measured 2026-09-20: boot-ok == version,
+    boot-try == version, WDT_RESET -> roll back.
+
     The whole thing is gated on a rollback copy existing. That is not just an
     optimisation: it also means the protocol only engages for trees this
     updater installed, so a tree deployed over USB - which may predate
@@ -399,9 +422,13 @@ def _recover():
     if not version:
         return False  # not OTA-managed at all yet
     if _read(BOOT_OK_FILE) == version:
-        if _read(BOOT_TRY_FILE):  # proven: stop calling it a pending attempt
-            _clear(BOOT_TRY_FILE)
-        return False
+        if not _reset_was_watchdog():
+            if _read(BOOT_TRY_FILE):  # proven: stop calling it a pending attempt
+                _clear(BOOT_TRY_FILE)
+            return False
+        # Fall through: this release has NOT proved it stays alive. Leave
+        # boot-try alone - it is the record of the chance being spent.
+        _log("watchdog fired with boot-ok set: " + version + " did not stay alive")
     if not _has_rollback():
         return False
     if _read(BOOT_TRY_FILE) != version:

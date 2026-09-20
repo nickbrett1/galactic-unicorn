@@ -33,6 +33,13 @@ from sound import Audio
 ROUTINES_PATH = "routines.json"
 LOOP_MS = 20
 
+# How long the render loop must keep feeding the fuse before the release is
+# allowed to call itself proven (see mark_boot_ok). Long enough that a release
+# which wedges in the loop never reaches it, short enough that a power blip in
+# the window is unlikely - and the window only exists on the first boot after
+# an update is applied, because after that boot-ok.txt already matches.
+BOOT_OK_SOAK_MS = 10000
+
 # Every switch we care about, by the name the engine uses.
 ALL_SWITCHES = {
     "A": SWITCHES["A"],
@@ -119,10 +126,20 @@ def mark_boot_ok(log):
 
     boot.py's updater compares this against version.txt on the next boot: a
     release that has had its chance and never wrote it gets the previous tree
-    put back. So it is written HERE and only here - immediately after the
-    banner, the first moment the app has demonstrably started (display built,
-    routines parsed, a frame drawn) - and never earlier, because it means
-    "this came up" and nothing else.
+    put back. So it is written HERE and only here.
+
+    WHEN it is written is the whole point, and it is NOT the banner. The banner
+    proves the app started; it does not prove the app stays started, and the
+    difference is a release that builds its display, draws a frame and then
+    wedges in the render loop. Writing this at the banner retired the release's
+    one chance before the loop had proved anything, so a release that wedged
+    every boot was judged healthy on the next boot and reset forever. The
+    watchdog alone cannot fix that: it turns "wedged forever" into "reset-loop
+    forever", which is not recovery. So the marker is delayed until the loop
+    has actually been feeding the fuse for BOOT_OK_SOAK_MS.
+
+    Not written from a timer callback, and not from boot.py: main.py owns it,
+    and the updater only ever reads it.
 
     Losing the write is not worth failing over: the updater's one-chance rule
     would roll a perfectly good release back on the next boot, which is a much
@@ -179,7 +196,6 @@ def main():
         raise
 
     boot_banner(display, log)
-    mark_boot_ok(log)
 
     audio = Audio(display, config)
     ambient = Ambient(display, config)
@@ -215,6 +231,9 @@ def main():
     else:
         log("wedge protection: no watchdog on this build (degraded, not broken)")
 
+    boot_ok_written = False
+    loop_started = time.ticks_ms()
+
     # The loop must not die: the panel stopped responding once before, and
     # Ctrl-C showed the loop had exited silently. So a bad frame is reported
     # and swallowed, and the report itself is guarded so that reporting a
@@ -226,6 +245,14 @@ def main():
         # wedged anything else on this thread - hard-resets the board into
         # boot.py's recovery instead of leaving a frozen panel on the wall.
         watchdog.feed()
+        # Retire the release's one chance only after the loop has demonstrably
+        # kept feeding the fuse. A release that wedges here never gets this far,
+        # so boot-ok.txt stays behind and boot.py rolls it back on the next
+        # boot. Done once, from the normal path, so it is a fact about the loop
+        # rather than a timer that fired hopefully.
+        if not boot_ok_written and time.ticks_diff(now, loop_started) >= BOOT_OK_SOAK_MS:
+            boot_ok_written = True
+            mark_boot_ok(log)
         try:
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.

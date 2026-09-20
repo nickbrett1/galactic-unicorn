@@ -11,7 +11,7 @@ solid run becomes one rectangle instead of N pixel writes.
 """
 
 FRAME_MS = 400  # how long each frame is held
-ICON_W = 10
+ICON_W = 10  # the usual icon width; the book is wider, so ask icon_width()
 ICON_H = 11
 
 def _falling(base, below, count=3, step=2):
@@ -113,54 +113,76 @@ BATH = tuple(
 # of a centre gutter with text lines on them. The blank column pair down the
 # middle is what makes it read as *open* - the earlier version was one nested
 # rectangle, which looked like the book had been turned ninety degrees.
-_BOOK_COVER = ".XXXXXXXX."
-_BOOK_PAGE = ".X......X."
-_BOOK_LINE = ".XXX..XXX."
+#
+# This one is deliberately wider than the other icons (ICON_W + 2): at 10 px
+# the pages were barely wide enough to hold a line of text, so the book looked
+# cramped next to the others.
+_BOOK_W = ICON_W + 2  # 12
+_BOOK_COVER = "X" * _BOOK_W
+_BOOK_PAGE = "X" + "." * (_BOOK_W - 2) + "X"
+_BOOK_LEFT = "X" * 5 + ".." + "." * 4 + "X"
+_BOOK_RIGHT = "X" + "." * 4 + ".." + "X" * 5
+_BOOK_BOTH = "X" * 5 + ".." + "X" * 5
 _BOOK_TEXT_ROWS = (2, 4, 6, 8)
 
 
-def _book_frame(lines):
-    """The open book with only its first `lines` text rows written."""
-    written = 0
+def _book_frame(left, right):
+    """The book mid-read: `left` lines written on the left page, `right` on
+    the right page. The reader fills the left page before starting the right -
+    lines appear in reading order."""
     rows = []
     for r in range(ICON_H):
         if r in (0, ICON_H - 1):
             rows.append(_BOOK_COVER)
-        elif r in _BOOK_TEXT_ROWS and written < lines:
-            rows.append(_BOOK_LINE)
-            written += 1
+        elif r in _BOOK_TEXT_ROWS:
+            band = _BOOK_TEXT_ROWS.index(r)
+            if band < left and band < right:
+                rows.append(_BOOK_BOTH)
+            elif band < left:
+                rows.append(_BOOK_LEFT)
+            elif band < right:
+                rows.append(_BOOK_RIGHT)
+            else:
+                rows.append(_BOOK_PAGE)
         else:
             rows.append(_BOOK_PAGE)
     return tuple(rows)
 
 
-# Four frames - one line, two, three, four - i.e. the page filling up.
-BOOK = tuple(_book_frame(n) for n in (1, 2, 3, 4))
+# Eight frames: down the left page a line at a time, then down the right.
+BOOK = tuple(
+    _book_frame(left, right)
+    for left, right in ((1, 0), (2, 0), (3, 0), (4, 0), (4, 1), (4, 2), (4, 3), (4, 4))
+)
 
-# Tidying: three toy boxes that slide into a neat stack. The boxes are drawn
-# hollow so they read as crates rather than bars, and the animation carries
-# the meaning on its own - scattered first, then squared away.
-_BOX = ("XXXXX", "X...X", "XXXXX")
+# Tidying: little boxes dropped into one big open box. The big box is drawn
+# with 2 px walls so it reads as a container even at a glance, and the small
+# box falls in on a repeating cycle - the story is "put it away", not just
+# "boxes exist".
+_LITTLE_BOX = ("XXXX", "X..X", "XXXX")
+_BIG_BOX = tuple(
+    "XX......XX"
+    if 5 <= row <= 9
+    else ("X" * ICON_W if row == 10 else "." * ICON_W)
+    for row in range(ICON_H)
+)
 
 
 def _place(x, row):
-    """One row of `_BOX` positioned at column x, padded to the icon width."""
+    """One icon row positioned at column x, padded out to the icon width."""
     return "." * x + row + "." * (ICON_W - x - len(row))
 
 
-def _box_pile(offsets):
-    """Three boxes stacked top to bottom, one at each x offset."""
-    rows = []
-    for i, x in enumerate(offsets):
-        rows.extend(_place(x, row) for row in _BOX)
-        if i < len(offsets) - 1:
-            rows.append("." * ICON_W)
+def _falling_box(top):
+    """A little box as a full-size layer, its first row at `top`."""
+    rows = ["." * ICON_W] * top
+    rows.extend(_place(3, row) for row in _LITTLE_BOX)
+    rows.extend(["." * ICON_W] * (ICON_H - len(rows)))
     return tuple(rows)
 
 
-BOXES = tuple(
-    _box_pile(offsets) for offsets in ((0, 5, 4), (1, 4, 3), (2, 2, 2), (2, 2, 2))
-)
+# Four frames: high, lower, at the mouth, then settled in the bottom.
+BOXES = tuple(_overlay(_BIG_BOX, _falling_box(top)) for top in (0, 2, 4, 7))
 
 ICONS = {
     "bath": BATH,
@@ -169,6 +191,13 @@ ICONS = {
     "book": BOOK,
     "boxes": BOXES,
 }
+
+
+def icon_width(name):
+    """How wide icon `name` draws. Icons are not all the same width, so the
+    PROMPT layout must ask rather than assume ICON_W."""
+    frames = ICONS.get(name)
+    return len(frames[0][0]) if frames else 0
 
 
 def draw_icon(display, name, x, y, age_ms, rgb=None):

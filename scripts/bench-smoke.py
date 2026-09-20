@@ -315,12 +315,14 @@ import icons
 def icon_frames_valid():
     for name, frames in icons.ICONS.items():
         assert frames, f"{name} has no frames"
+        width = icons.icon_width(name)
         for fr in frames:
             assert len(fr) == icons.ICON_H, f"{name}: {len(fr)} rows, want {icons.ICON_H}"
             for row in fr:
-                assert len(row) == icons.ICON_W, f"{name}: row is {len(row)} wide"
+                assert len(row) == width, f"{name}: row is {len(row)} wide, want {width}"
                 assert set(row) <= {"X", "."}, f"{name}: bad ink {sorted(set(row))}"
-    return f"{len(icons.ICONS)} icons, all {icons.ICON_W}x{icons.ICON_H}"
+    widths = {n: icons.icon_width(n) for n in icons.ICONS}
+    return f"{len(icons.ICONS)} icons, {icons.ICON_H} rows tall, widths {widths}"
 
 
 check("icon frames use only X/. and are the right size", icon_frames_valid)

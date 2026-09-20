@@ -208,13 +208,15 @@ class Engine:
             return
         routine = self.routine
         label = routine.get("label", "")
+        symbol = routine.get("symbol", "bath")
         icon_x = 0
         text_x = 0
-        span = icons.ICON_W + ICON_GAP + bigfont.text_width(label)
+        width = icons.icon_width(symbol)
+        span = width + ICON_GAP + bigfont.text_width(label)
         if 0 < span <= d.width:
             icon_x = (d.width - span) // 2
-            text_x = icon_x + icons.ICON_W + ICON_GAP
-        icons.draw_icon(d, routine.get("symbol", "tap"), icon_x, 0, age_ms, rgb=rgb)
+            text_x = icon_x + width + ICON_GAP
+        icons.draw_icon(d, symbol, icon_x, 0, age_ms, rgb=rgb)
         bigfont.draw_text(d, text_x, 0, label, rgb=rgb)
         d.update()
 

@@ -9,6 +9,7 @@ NTP -> the routine loop. Nothing after the self-test blocks on the network:
 the countdown is locally timed and runs with WiFi switched off.
 """
 
+import gc
 import json
 import time
 
@@ -150,16 +151,47 @@ def main():
     engine = Engine(display, buttons, audio, ambient, config, routines, button_map)
     log(f"entering loop (state={engine.state_name()})")
 
+    # Collect proactively rather than only when an allocation fails: the
+    # default (-1) lets the heap run to the wire, and an allocation failure at
+    # the wrong moment takes the whole display down (it did - see ambient.py).
+    gc.threshold(8192)
+
+    # --- bring-up instrumentation (2026-09-20): heartbeat + can't-die loop ---
+    # The panel stopped responding after a period of time, and Ctrl-C showed
+    # the loop had exited silently. Heartbeat every 5 s so we can see *when*
+    # it stops, and a hardened inner except so reporting a failure cannot
+    # itself kill the loop.
+    last_beat = time.ticks_ms()
     while True:
         now = time.ticks_ms()
         try:
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.
         except Exception as exc:  # noqa: BLE001
-            print_exception(exc)
+            try:
+                print_exception(exc)
+            except Exception:  # noqa: BLE001, S110 - report must not kill us too
+                pass
             time.sleep_ms(200)
+        if time.ticks_diff(now, last_beat) >= 5000:
+            last_beat = now
+            log(f"hb state={engine.state_name()} mem_free={gc.mem_free()}")
         time.sleep_ms(LOOP_MS)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    # We must know *why* the loop died, and the serial buffer is gone by the
+    # time anyone looks - so record it to the filesystem where it survives.
+    except BaseException as exc:
+        from sys import print_exception
+
+        print("unicorn: MAIN DIED:", repr(exc))
+        try:
+            with open("crash.log", "w") as f:
+                f.write(f"mem_free={gc.mem_free()}\n")
+                print_exception(exc, f)
+        except Exception:  # noqa: BLE001, S110 - must not hide the original
+            pass
+        raise

@@ -14,21 +14,37 @@ CLOCK_RGB = (0, 66, 104)
 STATUS_RGB = (0, 48, 96)
 BREATH_PERIOD_MS = 4000
 
+# Rebuild the clock string at most this often. The display only shows HH:MM,
+# so once a second is plenty - and it must NOT be per frame (see _draw_clock).
+CLOCK_REBUILD_MS = 1000
+
 
 class Ambient:
     def __init__(self, display, config):
         self.display = display
         self.config = config
         self.ntp_ok = False
+        self._label = None
+        self._label_w = 0
+        self._label_at = 0
 
     def _draw_clock(self):
         d = self.display
-        t = time.localtime(time.time() + self.config.UTC_OFFSET_S)
-        label = f"{t[3]:02d}:{t[4]:02d}"
-        w = d.text_width(label, scale=1)
-        x = (d.width - w) // 2
+        # Do NOT build the time string every frame. At ~50 fps that was a
+        # float, an 8-tuple and a string per frame - about 3.4 KB/s of garbage
+        # - which drove the heap to ~1 KB free at the bottom of each GC cycle
+        # and eventually killed the loop ("goes to sleep after a while"). The
+        # clock only changes once a minute, so rebuild at most once a second.
+        now_ms = time.ticks_ms()
+        stale = time.ticks_diff(now_ms, self._label_at) >= CLOCK_REBUILD_MS
+        if self._label is None or stale:
+            t = time.localtime(time.time() + self.config.UTC_OFFSET_S)
+            self._label = f"{t[3]:02d}:{t[4]:02d}"
+            self._label_w = d.text_width(self._label, scale=1)
+            self._label_at = now_ms
+        x = (d.width - self._label_w) // 2
         y = (d.height - 8) // 2
-        d.text(label, x, y, rgb=CLOCK_RGB, scale=1)
+        d.text(self._label, x, y, rgb=CLOCK_RGB, scale=1)
 
     def _draw_status_pixel(self, phase_ms):
         d = self.display

@@ -6,12 +6,17 @@ A galactic-unicorn project generated with genproj
 
 This project includes the following capabilities:
 
-- **Docker**: Adds Docker support for containerised builds and tooling.
-- **Python DevContainer**: Sets up a VS Code DevContainer with Python environment.
-- **MicroPython board**: Adds the MicroPython board toolchain (mpremote) plus the USB passthrough plumbing needed to drive an RP2-series board (RP2040 or RP2350) from inside the devcontainer. OrbStack forwards the board's CDC-ACM REPL into the Linux VM automatically, but a container only sees it when the device is granted explicitly - this capability emits that grant and a port auto-detect helper. The container keeps the macOS node name (/dev/tty.usbmodem<serial>), which changes with the USB port, so the port is discovered at runtime. Note the grant is deliberately broad: OrbStack assigns the node a dynamic character major, and the device-cgroup-rule grammar accepts only a single major or '*', so scoping the grant to USB serial is not expressible - the container can open any host character device. Access is exclusive: while the container holds the port, host tools such as Thonny cannot open it.
-- **Ruff (Python code quality)**: Adds fast, zero-configuration Python linting with Ruff (rules live in pyproject.toml [tool.ruff]). Lint locally with `ruff check`. Requires a Python devcontainer.
+- **Editor Configuration**: Shared VS Code extensions and workspace settings for consistent tooling across the team.
+- **Shell & Terminal**: Zsh shell with the Powerlevel10k prompt and productivity plugins.
 - **Doppler Secrets Management**: Integrates Doppler for secure secrets management. Enables the various MCP servers that rely on privileged tokens to access their services (e.g. CircleCI, GitHub, SonarQube).
 - **AI Coding Agents**: Sets up the AI coding agents in the devcontainer: goose (config, MCP servers and spec-first recipes) plus the Cursor and Antigravity CLIs.
+- **Container Agent**: Every generated devcontainer brings up and registers its own a2a-goose agent (`<repo>-dev`), reached over the tailnet by the LiteLLM proxy; reuses the a2a-goose GitHub release channel, so the container has the same self-update path as a host.
+- **Docker**: Adds Docker support for containerised builds and tooling.
+- **Python DevContainer**: Sets up a VS Code DevContainer with Python environment.
+- **Ruff (Python code quality)**: Adds fast, zero-configuration Python linting with Ruff (rules live in pyproject.toml [tool.ruff]). Lint locally with `ruff check`. Requires a Python devcontainer. The generated CI pipeline also runs `ruff check`.
+- **MicroPython board**: Adds the MicroPython toolchain (mpremote) and USB passthrough for driving an RP2-series board (RP2040 or RP2350) from the devcontainer.
+- **Buildkite Integration**: Runs CI on a self-hosted Buildkite agent (Apple silicon) instead of a metered cloud fleet. The pipeline and its GitHub webhook are created during generation, so there is no manual "set up project" step. Can run alongside CircleCI, so a repository can migrate without a flag day.
+- **GitHub Releases**: Publishes a GitHub Release with attached artifacts when a version is cut. The release step lives in the Buildkite pipeline, so it runs only after build and test passed on that commit: the version is bumped from the last tag, the tag is created by CI, the artifacts named by the project's own scripts/release-artifacts.sh are attached, and the release is published with generated notes. No version bookkeeping, and no PAT for a human to paste in.
 
 ## Setup
 
@@ -60,6 +65,25 @@ unset DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT
 doppler setup --no-interactive --project common --config dev
 ```
 
+## The container's agent
+
+This devcontainer brings up its own `a2a-goose` agent, registered in the hub as
+`galactic-unicorn-dev` - one agent per repo, so a restart reclaims the same entry
+instead of adding a second one. Turns are billed through the LiteLLM proxy
+configured in Doppler (`LITELLM_BASE_URL`).
+
+```bash
+scripts/agent-dev.sh start    # write secrets + config, fetch the launcher, run it
+scripts/agent-dev.sh status   # running or not, the card URL, the log tail
+scripts/agent-dev.sh stop     # SIGTERM, wait for a clean deregister, confirm gone
+```
+
+`start` runs from the devcontainer's post-start hook, so the agent is normally
+already up when you arrive. It fails open: with no network on a first start it
+prints why it did not start and leaves the project usable. Secrets come from
+Doppler into `~/.config/a2a-goose/env` (mode 0600) and never into the image or
+`containerEnv`.
+
 ## MicroPython board
 
 This repo targets the **Pimoroni Galactic Unicorn**. Its firmware lives at https://github.com/pimoroni/unicorn. The Galactic Unicorn has shipped with both RP2040 and RP2350 silicon, so this product name does **not** decide the chip - that is recorded separately below.
@@ -87,17 +111,6 @@ to keep in sync. OrbStack forwards the board's CDC-ACM REPL into the Linux VM
 **automatically**, so you do **not** need `orb usb attach` for this device. A
 container, however, only sees the node when the device is granted explicitly,
 which this devcontainer does.
-
-**Exception — flashing.** That automatic forwarding covers the CDC-ACM REPL
-only. In BOOTSEL mode the board enumerates as a USB **mass-storage** device
-(`2e8a:0003`, "RP2 Boot"), which OrbStack does **not** forward on its own, so
-neither `picotool` nor a host-mounted volume is reachable until you
-`orb usb attach <id>` (`orb usb list` prints the id). That path is fragile:
-`orb usb detach/attach` can wedge and take OrbStack down with it. The robust
-route is to flash from the **host** — put the board in BOOTSEL (`mpremote
-bootloader`) and copy the `.uf2` onto the `RPI-RP2` volume that macOS mounts,
-then let the board reboot. Note the first re-enumeration after a flash may
-leave the container without a REPL node; a physical replug restores it.
 
 The board keeps its macOS node name inside the container
 (`/dev/tty.usbmodem<serial>`), which **changes with the USB port**, so never
@@ -137,100 +150,18 @@ opens while the board is attached), replace the two runArgs with
 Firmware is linted with `ruff check .`, which covers the
 repository root (`main.py`, `config.py`) and `lib/`.
 
-Ruff cannot be told to target the board's MicroPython version. This board was
-reflashed to **MicroPython v1.29.0** on 2026-09-19 (up from the stock 1.19.1),
-but ruff's lowest `target-version` is **py37** — that is what `pyproject.toml`
-sets. The lint is therefore a **floor, not a guarantee**:
+Ruff cannot be told to target the board's MicroPython version. This board runs
+**MicroPython 1.19.1**, whose language is roughly **CPython 3.4**, but ruff's
+lowest `target-version` is **py37** — that is what `pyproject.toml` sets. The
+lint is therefore a **floor, not a guarantee**:
 
 - ruff **does** reject syntax newer than py37 — the walrus operator (`:=`),
   positional-only `/` parameters, and `match` statements.
 - ruff **does not** reject 3.5–3.7 constructs the board may not parse —
-  `async`/`await`, variable annotations, and numeric underscores.
+  f-strings, `async`/`await`, variable annotations, and numeric underscores.
 
 Keep firmware inside MicroPython's supported subset: a green ruff run alone
-does not prove the board will parse the code. (Measured on the board:
-f-strings, `.format()`, the walrus operator and numeric underscores **do**
-parse, on both 1.19.1 and v1.29.0. What does **not** parse is `/`
-positional-only parameters and `match`.)
-
-## WiFi and the ambient clock
-
-WiFi exists in phase 1 for **one** reason: NTP, so the idle screen can show a
-clock. Everything else — including the countdown — is locally timed and runs
-with WiFi switched off. If NTP never lands, AMBIENT degrades to a slow
-breathing status pixel, so a network problem looks "quiet", never "broken".
-
-Credentials live in `config_secrets.py`, which is **gitignored** and absent by
-default. **The source of truth is Doppler** (project `common`, config `dev`),
-so the secret survives a container rebuild. One command resolves it, pushes the
-whole firmware and restarts the board:
-
-```bash
-./scripts/deploy.sh             # secrets + firmware + restart, one step
-```
-
-(Secrets _only_: `./scripts/gen-secrets.sh`.)
-
-Why deploying is a host step: `config_secrets.py` runs **on the Pico W**, which
-has no `doppler` CLI, API token or TLS stack — Doppler can only be asked from
-the container.
-
-`config_secrets.example.py` is the committed shape of the file if you'd rather
-fill it in by hand.
-
-With `WIFI_ENABLED = True` in `config.py` but **no** credentials, `sync_ntp()`
-skips immediately, so the switch is safe to leave on — it costs nothing until
-the secrets file exists.
-
-Two things that bite:
-
-- **2.4 GHz only.** The Pico W has no 5 GHz radio. Use a 2.4 GHz SSID.
-- **`UTC_OFFSET_S` is a fixed offset, not a timezone.** There is no tz database
-  on the board, so it must be edited by hand at the DST switch (Eastern is
-  `-4 * 3600` in summer, `-5 * 3600` in winter).
-
-`NTP_ATTEMPTS` / `NTP_RETRY_MS` exist because the **first** query after
-association can time out — cold DNS/route, and `ntptime`'s built-in timeout is
-only 1 s. Without the retry the clock silently degrades on a cold boot.
-
-> **Secrets never live in this repo.** `scripts/gen-secrets.sh` pulls them from
-> Doppler into the gitignored `config_secrets.py`, so the repo and a rebuilt
-> container both start with no copy on disk. The board still needs a file, so
-> the generated output is deployed with `mpremote fs cp config_secrets.py :`.
-
-## First look: the showcase
-
-One command steps the panel through **every** screen the firmware can draw —
-boot banner, the countdown in both layouts, each routine's prompt, each
-handoff, the ambient clock — holding each long enough to look at, and printing
-a label to the REPL so you know what you are looking at. Run it the first time
-you are standing in front of the display:
-
-```bash
-./scripts/deploy.sh                     # get the current firmware onto the board
-mpremote connect "$(scripts/find-board.sh)" run scripts/showcase.py
-```
-
-It drives the **real** engine (`lib/routine.py`) through the real modules, so
-what you see is what the firmware does. It ends with a **button-identity
-sweep**: it names a button on the panel and prints which one actually fired,
-which is how you lock down which physical cap is A/B/C/D.
-
-`scripts/bench-smoke.py` is the other half of the picture — behavioural tests,
-no eyes required.
-
-Three things to know before you run it:
-
-- **It shows layout A and layout B back to back**, so the A-vs-B decision is
-  one look rather than a reflash. Whichever you pick is a one-line change:
-  `COUNTDOWN_LAYOUT` in `config.py`.
-- **It forces the room "lit".** The bench usually reads below `LIGHT_DARK`, and
-  AMBIENT deliberately goes fully dark in a dark room — so without this the
-  clock step would be a blank panel that looks like a bug. It prints the
-  measured `light()` value when it does this.
-- **When it ends, the firmware loop is not running** — `mpremote run`
-  interrupts it. `mpremote soft-reset` (or the board's reset button) hands the
-  panel back to `main.py`.
+does not prove the board will parse the code.
 
 ## Generated by genproj
 

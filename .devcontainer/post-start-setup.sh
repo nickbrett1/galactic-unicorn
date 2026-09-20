@@ -27,6 +27,12 @@ if command -v goose >/dev/null 2>&1; then
     goose update || echo "WARN: goose update failed, keeping current version"
 fi
 
+echo "INFO: Checking the container agent..."
+if [ -x "/workspaces/galactic-unicorn/scripts/agent-dev.sh" ]; then
+    "/workspaces/galactic-unicorn/scripts/agent-dev.sh" start || true
+else
+    echo "WARN: scripts/agent-dev.sh not found, skipping the container agent"
+fi
 
 
 echo "INFO: Services check/startup complete."

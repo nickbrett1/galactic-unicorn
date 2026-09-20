@@ -24,13 +24,6 @@ Thumbs.db
 # Optional
 
 
-# Device-local secrets. config.py is committed and holds no credentials;
-# WiFi lives in config_secrets.py, which never enters the repo (Appendix C).
-config_secrets.py
-
-# Ruff
-.ruff_cache/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -42,9 +35,3 @@ venv/
 
 
 
-
-# Firmware images (large; fetched from pimoroni/unicorn releases)
-*.uf2
-
-# Original stock Pimoroni demo pulled off the board (also in pimoroni/unicorn examples/)
-.board-backup/

@@ -59,7 +59,31 @@
         "ms-python.python",
         "ms-python.vscode-pylance",
         "charliermarsh.ruff",
-        "doppler.doppler-vscode"
+        "doppler.doppler-vscode",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "svelte.svelte-vscode",
+        "usernamehw.errorlens",
+        "streetsidesoftware.code-spell-checker",
+        "eamodio.gitlens",
+        "donjayamanne.githistory",
+        "mhutchie.git-graph",
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml",
+        "bierner.markdown-mermaid",
+        "pomdtr.excalidraw-editor",
+        "pejmannikram.vscode-auto-scroll",
+        "naumovs.color-highlight",
+        "oderwat.indent-rainbow",
+        "wix.vscode-import-cost",
+        "mkxml.vscode-filesize",
+        "christian-kohler.npm-intellisense",
+        "GitHub.vscode-pull-request-github",
+        "shyykoserhiy.git-autoconfig",
+        "actboy168.tasks",
+        "humao.rest-client",
+        "alefragnani.project-manager",
+        "mutantdino.resourcemonitor"
       ]
     }
   }

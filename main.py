@@ -195,6 +195,12 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except KeyboardInterrupt:
+        # Ctrl-C: a human at the REPL, or mpremote attaching over USB. This is
+        # NOT a crash, and it must not be recorded as one - crash.log is the
+        # only surviving record of why the loop actually died, and every
+        # debugging session was overwriting it with an interrupted traceback.
+        print("unicorn: interrupted (Ctrl-C) - not a crash, crash.log left alone")
     # We must know *why* the loop died, and the serial buffer is gone by the
     # time anyone looks - so record it to the filesystem where it survives.
     except BaseException as exc:

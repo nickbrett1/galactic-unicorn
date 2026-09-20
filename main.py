@@ -29,6 +29,11 @@ from display import (
 from routine import Engine
 from sound import Audio
 
+# DELIBERATELY BROKEN - OTA rollback drill. A runtime failure at import, not a
+# SyntaxError, because ruff in CI would reject a SyntaxError; the realistic bad
+# release parses cleanly and then dies on the board.
+raise RuntimeError("deliberately broken release - OTA rollback drill")
+
 ROUTINES_PATH = "routines.json"
 LOOP_MS = 20
 

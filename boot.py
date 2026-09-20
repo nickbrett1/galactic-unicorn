@@ -1,6 +1,6 @@
 """MicroPython runs this before main.py on every boot.
 
-It runs the leader update and NOTHING else. This file is deliberately tiny and
+It runs the latest-release update and NOTHING else. This file is deliberately tiny and
 deliberately does not touch the display, the buttons or the routine engine:
 whatever breaks in a release, boot.py still runs, so a bad release is repaired
 on the next boot instead of bricking the board. That is the whole safety story

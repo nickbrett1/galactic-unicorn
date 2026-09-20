@@ -18,6 +18,9 @@ not assumed:
                     STREAMED with r.raw.read(CHUNK) straight into the file.
   * hashlib.sha256 has no hexdigest() -> ubinascii.hexlify(h.digest())
   * ssl.wrap_socket HANGS; ssl.SSLContext works.
+  * `import os` does NOT bind os.path -> never use os.path here. A stray
+    os.path.exists once ran after a successful apply and got reported as a
+    failed update.
   * the flashed firmware ships no CA bundle, so the TLS channel is encrypted
     but NOT authenticated. Integrity rests on the manifest's sha256. This is a
     known, accepted compromise (the path is home-LAN -> GitHub on a device the
@@ -202,12 +205,24 @@ def _unpack(files):
 
 
 def _cleanup():
+    """Delete the staging files. Best-effort only.
+
+    A leftover pack or :next costs flash, not correctness. This matters
+    because the first end-to-end run proved the opposite: on this MicroPython
+    build `import os` does NOT bind os.path, so a stray `os.path.exists` here
+    raised AttributeError AFTER a fully successful apply, and the caller's
+    handler reported the whole update as failed. Hence the explicit
+    try-os.listdir probe (no os.path anywhere in this file).
+    """
     try:
         os.remove(PACK_PATH)
     except OSError:
         pass
-    if os.path.exists(NEXT_DIR):
-        _rmtree(NEXT_DIR)
+    try:
+        os.listdir(NEXT_DIR)
+    except OSError:
+        return
+    _rmtree(NEXT_DIR)
 
 
 def _apply(written, version):
@@ -239,7 +254,14 @@ def _update(config):
     written = _unpack(manifest["files"])
     _apply(written, version)
     _log("applied " + version + " (" + str(size) + " bytes, " + str(len(written)) + " files)")
-    _cleanup()
+    # Housekeeping must never be able to undo a good apply: the firmware is
+    # already in place and version.txt already stamped by this point, so a
+    # failure here is cosmetic and must be reported as such, not as a failed
+    # update (which is exactly what the first end-to-end run got wrong).
+    try:
+        _cleanup()
+    except Exception as exc:  # noqa: BLE001
+        _log("cleanup failed (harmless, firmware is in place)", exc)
     return True
 
 

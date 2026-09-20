@@ -4,9 +4,10 @@ MicroPython runs this file on boot. Imports resolve from the filesystem root
 and from lib/, so reusable modules live in lib/ and are imported by their
 module name.
 
-Boot order: BOOT self-test ("hello" + a diagnostics banner) -> best-effort
-NTP -> the routine loop. Nothing after the self-test blocks on the network:
-the countdown is locally timed and runs with WiFi switched off.
+Boot order: BOOT self-test (banner "v<version>" - the release applied by the
+updater) -> best-effort NTP -> the routine loop. Nothing after the self-test
+blocks on the network: the countdown is locally timed and runs with WiFi
+switched off.
 """
 
 import gc
@@ -95,11 +96,27 @@ def sync_ntp(log):
         return False
 
 
+def firmware_version():
+    """The release the updater applied, read from version.txt at every boot.
+
+    The boot banner shows this, which makes the banner self-evidencing: the
+    number on the panel is the release boot.py just pulled over the air. A USB
+    deploy has no version.txt (only the updater writes it, last, on success),
+    which reads "dev" - correctly, because nothing has been released onto it.
+    """
+    try:
+        with open("version.txt") as fh:
+            return fh.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
 def boot_banner(display, log):
     """BOOT / self-test. Also the phase-0 'hello' target."""
-    log(f"BOOT {config.BOARD} / {config.CHIP}")
+    version = firmware_version()
+    log(f"BOOT {config.BOARD} / {config.CHIP} fw={version}")
     display.set_brightness(config.BRIGHTNESS_COUNTDOWN)
-    msg = "hi there"
+    msg = "v" + version
     width = display.text_width(msg, scale=1)
     for x in range(display.width, -width, -1):
         display.clear()

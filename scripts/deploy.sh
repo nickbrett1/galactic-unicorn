@@ -21,12 +21,36 @@ port=$(scripts/find-board.sh)
 echo "deploy: board on ${port}"
 
 # 3. Push the firmware. `:lib` may already exist, so ignore mkdir's error.
-# boot.py first: it runs before main.py and is where the remote updater hooks
-# in. It is deliberately NOT in the update pack, so it only ever changes here.
+# boot.py is deliberately NOT in the update pack, so it only ever changes here.
+# Neither is lib/updater.py (the pack builder excludes it - a remote updater
+# that can replace itself is how you ship a brick). That makes THIS script the
+# only way either of them ever reaches the board, including the watchdog feeds
+# inside updater._join_wifi / updater._download.
 mpremote connect "$port" fs mkdir :lib 2>/dev/null || true
-mpremote connect "$port" fs cp boot.py config.py main.py routines.json :
+
+# An armed watchdog outlives a soft reset (lib/watchdog.py), so a board parked
+# at the REPL still has an 8 s fuse burning - and Ctrl-C is what put it there.
+# Re-arm (which merely reloads the counter) before each push, or a slow copy
+# gets cut off halfway through and leaves a half-written tree. Done inline with
+# machine.WDT rather than via lib/watchdog.py, so it also works on a board
+# whose lib/ predates the module.
+feed() { mpremote connect "$port" exec 'import machine; machine.WDT(timeout=8000)' 2>/dev/null || true; }
+
+# ORDER MATTERS, and it is lib/ BEFORE main.py. main.py does `import watchdog`
+# at the top, so a board that receives the new main.py before the new lib/ dies
+# on ImportError - and because an armed fuse outlives a reset, it dies *every*
+# 8 s, which is a slow and confusing way to discover a missing file. lib/ first,
+# and the entry point last, means there is no moment at which main.py can run
+# against a lib/ it cannot satisfy.
+feed
+mpremote connect "$port" fs cp boot.py config.py routines.json :
+feed
 mpremote connect "$port" fs cp config_secrets.py :
+feed
 mpremote connect "$port" fs cp lib/*.py :lib/
+# main.py last, and on its own line, for the reason above.
+feed
+mpremote connect "$port" fs cp main.py :
 
 # 4. Restart. Soft reset re-runs main.py without re-enumerating USB, which
 #    matters here: a USB re-enumeration can drop the container's serial node.

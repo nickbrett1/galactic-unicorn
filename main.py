@@ -15,6 +15,7 @@ import json
 import time
 
 import config
+import watchdog
 from ambient import Ambient
 from buttons import Buttons
 from display import (
@@ -71,6 +72,7 @@ def sync_ntp(log):
                 if time.ticks_diff(time.ticks_ms(), started) > 15000:
                     log("ntp: wifi join timed out")
                     return False
+                watchdog.feed()
                 time.sleep_ms(200)
         log("ntp: wifi up, syncing")
         import ntptime
@@ -80,6 +82,7 @@ def sync_ntp(log):
         # not warm yet, and ntptime's built-in timeout is only 1 s. Without this
         # the clock silently degrades to the status pixel on a cold boot.
         for attempt in range(1, config.NTP_ATTEMPTS + 1):
+            watchdog.feed()
             try:
                 ntptime.settime()
                 log(f"ntp: synced (attempt {attempt}) -> {time.localtime()}")
@@ -156,6 +159,14 @@ def main():
     def log(message):
         print("unicorn:", message)
 
+    # Only one thing survives a hard reset badly enough to be worth asking
+    # about: the watchdog. A hard reset wipes the heap, the display and any
+    # in-memory note of what happened, so this is the *only* evidence the
+    # wedge protection ever fired - and without it a self-heal looks
+    # indistinguishable from a power blip.
+    if watchdog.reset_was_watchdog():
+        log("last restart: WATCHDOG FIRED - the app stopped feeding it")
+
     try:
         display = Display(config)
         routines, button_map = load_routines()
@@ -195,6 +206,15 @@ def main():
     # the wrong moment takes the whole display down (it did - see ambient.py).
     gc.threshold(8192)
 
+    # The fuse starts here for the app's sake, but be clear that it does not
+    # END here: an armed WDT survives a soft reset, so the next boot's
+    # updater runs under it too and has to feed it (lib/watchdog.py, and the
+    # feed calls in updater._join_wifi / updater._download).
+    if watchdog.arm():
+        log(f"wedge protection: watchdog armed at {watchdog.TIMEOUT_MS} ms")
+    else:
+        log("wedge protection: no watchdog on this build (degraded, not broken)")
+
     # The loop must not die: the panel stopped responding once before, and
     # Ctrl-C showed the loop had exited silently. So a bad frame is reported
     # and swallowed, and the report itself is guarded so that reporting a
@@ -202,6 +222,10 @@ def main():
     # BaseException handler below records why to crash.log.
     while True:
         now = time.ticks_ms()
+        # The fuse is fed here, every 20 ms, so a wedged engine.tick() - or a
+        # wedged anything else on this thread - hard-resets the board into
+        # boot.py's recovery instead of leaving a frozen panel on the wall.
+        watchdog.feed()
         try:
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.

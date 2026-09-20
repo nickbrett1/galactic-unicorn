@@ -50,6 +50,13 @@ import os
 import struct
 import time
 
+try:
+    from watchdog import feed as _wdt_feed
+except ImportError:  # a tree without lib/watchdog.py: no fuse to feed
+
+    def _wdt_feed():
+        pass
+
 VERSION_FILE = "version.txt"
 PACK_PATH = ":incoming.pack"
 NEXT_DIR = ":next"
@@ -132,6 +139,9 @@ def _join_wifi(config):
     while not wlan.isconnected():
         if time.ticks_diff(time.ticks_ms(), started) > WIFI_JOIN_MS:
             return False
+        # The join can legitimately take 15 s and the fuse is 8 s, so this is
+        # load-bearing, not tidiness: without it a slow join resets the board.
+        _wdt_feed()
         time.sleep_ms(200)
     return True
 
@@ -166,6 +176,7 @@ def _download(url, dest, expect_sha):
     try:
         with open(dest, "wb") as fh:
             while True:
+                _wdt_feed()
                 gc.collect()
                 chunk = response.raw.read(CHUNK)
                 if not chunk:

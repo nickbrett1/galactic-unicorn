@@ -61,7 +61,11 @@ VERSION_FILE = "version.txt"
 PACK_PATH = ":incoming.pack"
 NEXT_DIR = ":next"
 CHUNK = 1024
-WIFI_JOIN_MS = 15000
+# One join ATTEMPT. Association is quick and reliable; it is IP acquisition
+# that can hang for the whole attempt, so the useful knob is how many attempts
+# we make, not how long a single one is (see _join_wifi).
+WIFI_ATTEMPT_MS = 10000
+WIFI_ATTEMPTS = 3
 LOG_FILE = "update.log"
 MANIFEST_LIMIT = 16384
 
@@ -125,6 +129,27 @@ def _local_version():
     return _read(VERSION_FILE)
 
 
+def _wdt_sleep(ms):
+    """Sleep in fuse-sized steps. The fuse is 8 s and an attempt is 10 s."""
+    started = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), started) < ms:
+        _wdt_feed()
+        time.sleep_ms(200)
+
+
+def _wait_for_ip(wlan, budget_ms):
+    """True once the station has an IP. Feeds the fuse while it waits."""
+    started = time.ticks_ms()
+    while not wlan.isconnected():
+        if time.ticks_diff(time.ticks_ms(), started) > budget_ms:
+            return False
+        # The join can legitimately outlast the 8 s fuse, so this is
+        # load-bearing, not tidiness: without it a slow join resets the board.
+        _wdt_feed()
+        time.sleep_ms(200)
+    return True
+
+
 def _join_wifi(config):
     if not config.WIFI_SSID:
         return False
@@ -134,16 +159,29 @@ def _join_wifi(config):
     wlan.active(True)
     if wlan.isconnected():
         return True
-    wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
-    started = time.ticks_ms()
-    while not wlan.isconnected():
-        if time.ticks_diff(time.ticks_ms(), started) > WIFI_JOIN_MS:
-            return False
-        # The join can legitimately take 15 s and the fuse is 8 s, so this is
-        # load-bearing, not tidiness: without it a slow join resets the board.
-        _wdt_feed()
-        time.sleep_ms(200)
-    return True
+    # Association was never the problem: the board reaches "associated, no IP"
+    # (status 2) within a second or two and then sits there while DHCP never
+    # completes - for the WHOLE attempt. Measured on this board: boot.py's first
+    # join burned the full timeout and logged "no wifi", while main.py's join
+    # seconds later on the same radio got an IP in 4 s; a manual join got an IP
+    # 6/6 on one run and 0/6 three minutes later. So a single attempt is a coin
+    # flip, and a retry is what converts it - but the DHCP exchange has to be
+    # restarted, which needs a disconnect first.
+    for attempt in range(1, WIFI_ATTEMPTS + 1):
+        if attempt > 1:
+            try:
+                wlan.disconnect()
+            except Exception:  # noqa: BLE001, S110 - not connected is fine
+                pass
+            _wdt_sleep(500)
+        try:
+            wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
+        except OSError as exc:
+            _log("wifi connect raised", exc)
+        if _wait_for_ip(wlan, WIFI_ATTEMPT_MS):
+            return True
+        _log(f"wifi attempt {attempt}/{WIFI_ATTEMPTS} got no IP")
+    return False
 
 
 def _get(url):

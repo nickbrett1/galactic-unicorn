@@ -15,6 +15,7 @@ import json
 import time
 
 import config
+import updater
 import watchdog
 from ambient import Ambient
 from buttons import Buttons
@@ -181,8 +182,14 @@ def main():
     # in-memory note of what happened, so this is the *only* evidence the
     # wedge protection ever fired - and without it a self-heal looks
     # indistinguishable from a power blip.
+    #
+    # reset_cause() is a LATCH, not a report on this boot: measured on the
+    # board, CAUSE read 3 both before and after a soft reset. So this says the
+    # watchdog has fired at some point since power-on, which is all it can
+    # honestly claim - the old wording read as a statement about the boot just
+    # finished, and that misled a diagnosis for a while.
     if watchdog.reset_was_watchdog():
-        log("last restart: WATCHDOG FIRED - the app stopped feeding it")
+        log("watchdog has fired since power-on (a latch, not a fact about this boot)")
 
     try:
         display = Display(config)
@@ -233,6 +240,9 @@ def main():
 
     boot_ok_written = False
     loop_started = time.ticks_ms()
+    # boot.py already had its one look at the network this boot, so the first
+    # in-loop attempt waits a full interval rather than doubling up on it.
+    update_checked_at = loop_started
 
     # The loop must not die: the panel stopped responding once before, and
     # Ctrl-C showed the loop had exited silently. So a bad frame is reported
@@ -253,6 +263,23 @@ def main():
         if not boot_ok_written and time.ticks_diff(now, loop_started) >= BOOT_OK_SOAK_MS:
             boot_ok_written = True
             mark_boot_ok(log)
+        # Retry the update from here, not just from boot.py: the network fails
+        # in windows of minutes, so an update that missed its chance at boot
+        # should still land when the network clears. Placed AFTER mark_boot_ok
+        # on purpose - this can block the display for ~30 s in a dead window,
+        # and a release must not have its soak interrupted by its own update
+        # check. check_for_update resets the board if it applies anything.
+        if time.ticks_diff(now, update_checked_at) >= getattr(
+            config, "UPDATE_RETRY_MS", 15 * 60 * 1000
+        ):
+            update_checked_at = time.ticks_ms()
+            # lib/updater.py is EXCLUDED from the pack, so a release can reach
+            # the board before the updater that backs it - this call has to
+            # tolerate an older updater rather than raise inside the loop. The
+            # feature is optional; the display is not.
+            check = getattr(updater, "check_for_update", None)
+            if check is not None:
+                check(config)
         try:
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.

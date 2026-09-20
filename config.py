@@ -112,6 +112,15 @@ UPDATE_MANIFEST_URL = (
     "https://github.com/nickbrett1/galactic-unicorn/releases/latest/download/manifest.json"
 )
 
+# boot.py gets ONE look at the network per boot, and the network here fails in
+# windows of minutes rather than failing outright: measured on this board, six
+# joins got an IP in ~3 s and six more, minutes later, got none at all. No
+# boot-time budget can outlast that, so the loop retries on a slow timer and a
+# window that opens an hour later is still caught. The cost is that an attempt
+# blocks the display while it waits on the network (up to ~30 s in a dead
+# window), which is why this is minutes and not seconds.
+UPDATE_RETRY_MS = 15 * 60 * 1000
+
 # ---------------------------------------------------------------------------
 # Secrets (gitignored; absent by default)
 # ---------------------------------------------------------------------------

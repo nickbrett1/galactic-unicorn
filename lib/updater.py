@@ -530,6 +530,37 @@ def _mark_attempt():
         _write(BOOT_TRY_FILE, version)
 
 
+def check_for_update(config):
+    """Try the whole update once, from the running app. Never raises.
+
+    boot.py only gets one look at the network per boot, and this network fails
+    in WINDOWS of minutes rather than failing outright - measured on the board,
+    six joins got an IP in ~3 s and six more, minutes later, got none. A
+    boot-time budget cannot outlast that, so the loop retries on a slow timer,
+    where a window that opens an hour later is still caught.
+
+    Deliberately does NOT run recovery. Putting a previous tree back is boot.py's
+    job, and a running app is by definition a tree that already came up; judging
+    it here could roll back a release that is working perfectly well.
+
+    Returns True only if it applied an update, and resets on the way out so the
+    new tree actually runs - _apply renames files over the live tree, so the
+    interpreter would otherwise keep running the old code it already imported.
+    """
+    try:
+        if not getattr(config, "UPDATE_ENABLED", False):
+            return False
+        if not _join_wifi(config):
+            return False
+        applied = _update(config)
+    except Exception as exc:  # noqa: BLE001 - an update must not stop the display
+        _log("update check failed, keeping current firmware", exc)
+        return False
+    if applied:
+        _reset()
+    return applied
+
+
 def run():
     """Called from boot.py. Never raises; returns True only if it applied an update."""
     applied = False

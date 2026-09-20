@@ -7,7 +7,7 @@ what you are looking at:
 
     hello banner
       -> COUNTDOWN at 100% / 50% / 90% done (red -> amber -> green)
-      -> PROMPT for each routine (icon + big label; you hear each motif)
+      -> PROMPT for each routine (icon + big label)
       -> HANDOFF for each routine (icon + label flashing green)
       -> NTP sync + the ambient clock
       -> a button-identity sweep (which physical cap is A/B/C/D)
@@ -174,11 +174,12 @@ if RUN_TOUR:
     show_countdown(0.5, "halfway - amber, half the panel")
     show_countdown(0.1, "nearly done - green, the whole panel lit")
 
-    # -- 3. PROMPT, one per routine (this is where you hear the motif) ------
-    banner("PROMPT - ~3 s of icon + big label (the tune plays; listen)")
+    # -- 3. PROMPT, one per routine (silent - nothing sounds until a timer
+    #        expires) -------------------------------------------------
+    banner("PROMPT - ~3 s of icon + big label (silent, by design)")
     for routine in routines:
         log(f"{routine.get('id')}: label={routine.get('label')!r} "
-            f"tune={routine.get('tune')} button={routine.get('button')}")
+            f"symbol={routine.get('symbol')} button={routine.get('button')}")
         now = time.ticks_ms()
         engine.start_prompt(routine.get("id"), now)
         # Stop just short of the automatic hand-off to COUNTDOWN.

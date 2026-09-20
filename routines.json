@@ -14,7 +14,6 @@
       "minutes": 5,
       "button": "A",
       "symbol": "bath",
-      "tune": "motif1",
       "end_message": "BATHTIME!"
     },
     {
@@ -24,7 +23,6 @@
       "minutes": 5,
       "button": "B",
       "symbol": "book",
-      "tune": "motif2",
       "end_message": "BOOK TIME!"
     },
     {
@@ -34,7 +32,6 @@
       "minutes": 3,
       "button": "C",
       "symbol": "boxes",
-      "tune": "motif3",
       "end_message": "TIDY UP!"
     }
   ]

@@ -156,12 +156,11 @@ def main():
     # the wrong moment takes the whole display down (it did - see ambient.py).
     gc.threshold(8192)
 
-    # --- bring-up instrumentation (2026-09-20): heartbeat + can't-die loop ---
-    # The panel stopped responding after a period of time, and Ctrl-C showed
-    # the loop had exited silently. Heartbeat every 5 s so we can see *when*
-    # it stops, and a hardened inner except so reporting a failure cannot
-    # itself kill the loop.
-    last_beat = time.ticks_ms()
+    # The loop must not die: the panel stopped responding once before, and
+    # Ctrl-C showed the loop had exited silently. So a bad frame is reported
+    # and swallowed, and the report itself is guarded so that reporting a
+    # failure cannot kill the loop too. If this ever does exit, the
+    # BaseException handler below records why to crash.log.
     while True:
         now = time.ticks_ms()
         try:
@@ -173,9 +172,6 @@ def main():
             except Exception:  # noqa: BLE001, S110 - report must not kill us too
                 pass
             time.sleep_ms(200)
-        if time.ticks_diff(now, last_beat) >= 5000:
-            last_beat = now
-            log(f"hb state={engine.state_name()} mem_free={gc.mem_free()}")
         time.sleep_ms(LOOP_MS)
 
 

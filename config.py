@@ -44,10 +44,10 @@ LIGHT_DIM = 400
 
 VOLUME = 0.5
 # Master audio switch: when False no synth channel is created at all, so
-# nothing can play (boot, PROMPT, HANDOFF, volume buttons all no-op).
-# Turned OFF 2026-09-19 for silent panel-glance work; flip back to True to
-# re-enable the per-routine motifs.
-AUDIO_ENABLED = False
+# nothing can play (the chime and the volume buttons both no-op). Audio is
+# deliberately minimal when on: see lib/sound.py - the board is silent until
+# a timer expires.
+AUDIO_ENABLED = True
 
 # ---------------------------------------------------------------------------
 # Timings (milliseconds)

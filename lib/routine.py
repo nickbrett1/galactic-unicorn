@@ -99,7 +99,7 @@ class Engine:
             return
         self.routine = routine
         self._enter(PROMPT, now)
-        self.audio.play(routine.get("tune", "motif1"), variant="prompt")
+        # Deliberately silent: nothing sounds until the timer expires.
 
     def start_countdown(self, now):
         if self.routine is None:
@@ -302,7 +302,9 @@ class Engine:
         if self.state == COUNTDOWN:
             self.display.set_brightness(self.config.BRIGHTNESS_COUNTDOWN)
             if self.remaining_ms(now) <= 0:
-                self.audio.play(self.routine.get("tune", "motif1"), variant="handoff")
+                # The one sound the board makes, and the same for every
+                # routine: the timer is up.
+                self.audio.chime()
                 self._enter(HANDOFF, now)
                 self._render_handoff(now)
                 return

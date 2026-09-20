@@ -1,16 +1,16 @@
-"""Synth helpers and the per-routine motifs.
+"""Synth helper: the one chime the board plays when a timer expires.
 
 NOT called `audio.py`. MicroPython v1.29.0 (flashed 2026-09-19) ships a FROZEN
 `audio` module (I2S / WavPlayer), and sys.path is ['', '.frozen', '/lib'] -
 `.frozen` wins over `/lib`, so a `lib/audio.py` is silently shadowed and
 `from audio import Audio` raises ImportError. Do not rename this file back.
 
-No audio files: everything is generated with the board's synth, so a motif is
+No audio files: the chime is generated with the board's synth, so it is just
 a list of (frequency, seconds) pairs - cheap to add, cheap to change.
 
-The same motif plays twice per routine: ascending at PROMPT (the heads-up)
-and resolved/brighter at HANDOFF (the go). Repetition is the point - it wires
-the sound to what is about to happen.
+Audio is deliberately minimal: the panel is silent when a routine is chosen
+and through the whole countdown, and speaks only at the end. One sound, the
+same for every routine, so it can only ever mean "time is up".
 
 API verified on this board 2026-09-19:
     channel.configure(WAVEFORM, attack=<s>, decay=<s>, sustain=<0-1>,
@@ -29,16 +29,11 @@ SQUARE 64, NOISE 128), not on GalacticUnicorn.
 # one. Every catch here is a blind one on purpose, so a file-level directive
 # is the honest spelling rather than three identical inline ones.
 
-# Distinct intervals and rhythms per routine, so the tune alone identifies it.
-# The child does not have to be looking at the screen.
-MOTIFS = {
-    "motif1": [(523, 0.10), (659, 0.10), (784, 0.18)],  # duck: rising thirds
-    "motif2": [(587, 0.12), (698, 0.12), (880, 0.20)],  # book: wider rising
-    "motif3": [(659, 0.08), (659, 0.08), (988, 0.20)],  # tidyup: double tap
-}
-
-# Handoff resolves the same motif an octave up, on a brighter waveform.
-_HANDOFF_LIFT = 2  # multiply the final note by 2 ** this
+# The one sound the board makes: a bright rising triad, played when a timer
+# expires. Deliberately identical for every routine - it means "time is up",
+# and one unmistakable sound is easier to learn than three similar ones. The
+# child hears it once per routine, at the moment the screen goes green.
+DONE_SOUND = [(784, 0.11), (988, 0.11), (1319, 0.35)]  # G5 B5 E6, rising
 
 
 class Audio:
@@ -53,19 +48,18 @@ class Audio:
         if config.AUDIO_ENABLED:
             try:
                 self.channel = display.synth_channel(0)
-                self._configure("prompt")
+                self._configure()
                 display.set_volume(config.VOLUME)
             except Exception:
                 self.channel = None
 
-    def _configure(self, variant):
+    def _configure(self):
         ch = self.channel
         if ch is None:
             return
-        waveform = ch.SQUARE if variant == "handoff" else ch.TRIANGLE
         try:
             ch.configure(
-                waveform,
+                ch.SQUARE,
                 attack=0.01,
                 decay=0.08,
                 sustain=0.85,
@@ -75,19 +69,15 @@ class Audio:
         except Exception:
             pass
 
-    def play(self, tune_name, variant="prompt"):
-        """Queue a motif. Returns immediately (play_tone is non-blocking)."""
+    def chime(self):
+        """Play the time-is-up sound. Returns immediately (play_tone is
+        non-blocking, so it queues the whole triad and the display loop keeps
+        running)."""
         ch = self.channel
         if ch is None or self.muted:
             return
-        notes = MOTIFS.get(tune_name)
-        if not notes:
-            return
-        self._configure(variant)
         try:
-            for i, (freq, dur) in enumerate(notes):
-                if variant == "handoff" and i == len(notes) - 1:
-                    freq = freq * (2 ** _HANDOFF_LIFT)
+            for freq, dur in DONE_SOUND:
                 ch.play_tone(int(freq), dur)
             self.display.play_synth()
         except Exception:

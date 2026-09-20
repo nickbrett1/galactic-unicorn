@@ -152,17 +152,27 @@ check("draw_bar 1.0/0.5/0.0", draw_bar_probe)
 # -- audio ------------------------------------------------------------------
 audio = Audio(d, config)
 
-def play_all_motifs():
-    for tune in ("motif1", "motif2", "motif3"):
-        audio.play(tune, variant="prompt")
-        time.sleep_ms(500)
-        audio.play(tune, variant="handoff")
-        time.sleep_ms(500)
+def play_the_chime():
+    audio.chime()
+    time.sleep_ms(600)
     audio.stop()
-    return "3 motifs x prompt/handoff queued without error"
+    return "the time-is-up chime queued without error"
 
 
-check("queue every motif (prompt + handoff)", play_all_motifs)
+check("queue the time-is-up chime", play_the_chime)
+
+
+def audio_channel_live():
+    # Audio is fail-soft (a dead synth must not take the display down), so a
+    # queued tone proves nothing on its own. This asserts the channel itself
+    # came up, which is what "audio is actually enabled" means.
+    if not config.AUDIO_ENABLED:
+        return "AUDIO_ENABLED is False - nothing to check"
+    assert audio.channel is not None, "AUDIO_ENABLED but synth_channel(0) failed"
+    return "synth channel 0 acquired"
+
+
+check("synth channel is live when audio is enabled", audio_channel_live)
 
 # -- buttons ----------------------------------------------------------------
 switches = {

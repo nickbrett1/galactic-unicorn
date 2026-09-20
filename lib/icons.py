@@ -114,15 +114,17 @@ BATH = tuple(
 # middle is what makes it read as *open* - the earlier version was one nested
 # rectangle, which looked like the book had been turned ninety degrees.
 #
-# This one is deliberately wider than the other icons (ICON_W + 2): at 10 px
-# the pages were barely wide enough to hold a line of text, so the book looked
-# cramped next to the others.
-_BOOK_W = ICON_W + 2  # 12
+# This one is deliberately wider than the other icons (ICON_W + 4): at 10 px
+# the pages were barely wide enough to hold a line of text, and the lines ran
+# straight into the cover edge. The extra columns buy a blank margin either
+# side of the gutter, so each line sits *inside* its page and reads as text
+# rather than as part of the border.
+_BOOK_W = ICON_W + 4  # 14
 _BOOK_COVER = "X" * _BOOK_W
 _BOOK_PAGE = "X" + "." * (_BOOK_W - 2) + "X"
-_BOOK_LEFT = "X" * 5 + ".." + "." * 4 + "X"
-_BOOK_RIGHT = "X" + "." * 4 + ".." + "X" * 5
-_BOOK_BOTH = "X" * 5 + ".." + "X" * 5
+_BOOK_LEFT = "X" + "." + "XXXX" + ".." + "...." + "." + "X"
+_BOOK_RIGHT = "X" + "." + "...." + ".." + "XXXX" + "." + "X"
+_BOOK_BOTH = "X" + "." + "XXXX" + ".." + "XXXX" + "." + "X"
 _BOOK_TEXT_ROWS = (2, 4, 6, 8)
 
 

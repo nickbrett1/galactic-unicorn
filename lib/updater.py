@@ -37,8 +37,12 @@ someone power-cycling it. So there is also a rollback slot:
   * before a release overwrites the tree, the tree is copied to :prev/
   * main.py writes boot-ok.txt once it has actually come up
   * the next boot compares the two; a release that has had its single chance
-    and never reported in gets the previous tree put back, offline, and is
-    recorded in bad.txt so it is never adopted again.
+    and never reported in gets the previous tree put back, offline, so the
+    board comes up on something that works.
+
+Nothing is blacklisted. A release that fails this way is simply not running any
+more, and the fix is to repair it and publish a new version on top - an owner
+who can release can always outrun a bad release.
 
 That covers the failure mode the drill exposed: a release that dies on a clean
 Python exception, where nothing would otherwise ever reboot the board.
@@ -74,13 +78,11 @@ MANIFEST_LIMIT = 16384
 #   version.txt   the release that is running now (written LAST by an apply)
 #   boot-ok.txt   the release that has PROVEN it comes up (written by main.py)
 #   boot-try.txt  the release that has had its one chance at booting
-#   bad.txt       a release that failed and was rolled back; never applied again
 #   prev.json     what the rollback copy is: {version, files, managed}
 PREV_DIR = ":prev"
 PREV_INFO = "prev.json"
 BOOT_OK_FILE = "boot-ok.txt"
 BOOT_TRY_FILE = "boot-try.txt"
-BAD_FILE = "bad.txt"
 UNKNOWN_VERSION = "dev"
 
 
@@ -411,7 +413,7 @@ def _archive_current(version, managed):
     return entries
 
 
-def _rollback(failed):
+def _rollback():
     """Put the previous tree back. Offline, and verified before anything moves.
 
     Same discipline as an apply: hash the whole copy first, then rename, then
@@ -441,7 +443,6 @@ def _rollback(failed):
         _mkdirs(entry["path"])
         os.rename(dest, entry["path"])
     _write(VERSION_FILE, info["version"] or UNKNOWN_VERSION)
-    _write(BAD_FILE, failed)
     _clear(BOOT_TRY_FILE)
     _clear(PREV_INFO)
     _rmtree(PREV_DIR)
@@ -475,7 +476,7 @@ def _recover():
         return False
     if _read(BOOT_TRY_FILE) != version:
         return False  # has not had its chance yet
-    previous = _rollback(version)
+    previous = _rollback()
     _log(
         "rolled back from "
         + version
@@ -491,11 +492,6 @@ def _update(config):
     version = manifest["version"]
     current = _local_version()
     if version == current:
-        return False
-    # A release that already failed to come up must never be adopted again, or
-    # the board would roll back to it and forward onto it forever.
-    if version == _read(BAD_FILE):
-        _log("skipping " + version + ": already rolled back from it")
         return False
     pack = manifest["pack"]
     size = _download(base + "/" + pack["file"], PACK_PATH, pack["sha256"])

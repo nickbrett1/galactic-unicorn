@@ -98,6 +98,40 @@ def case(name, boot_ok, boot_try, want_rollback, want_version):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_no_blacklist():
+    """A rolled-back release must stay adoptable, and nothing else must be left.
+
+    This is a regression test for a real deadlock. On hardware the board applied
+    v0.1.11, was interrupted before main.py could soak long enough to write
+    boot-ok, rolled back - and wrote a bad.txt. _update then refused 0.1.11
+    before it so much as looked at the network, so a perfectly good release was
+    unreachable until bad.txt was deleted by hand. Three rounds of that.
+
+    There is deliberately no such file now: the fix for a bad release is a new
+    release on top of it. The hasattr check is the point of the test - it fails
+    if the blacklist is ever reintroduced.
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        lay_out_tree(tmp, "0.1.10", "0.2.0")
+        updater._recover()
+        leftovers = sorted(
+            name
+            for name in os.listdir(tmp)
+            if "bad" in name or name in (updater.BOOT_TRY_FILE, updater.PREV_INFO)
+        )
+        ok = not leftovers and not hasattr(updater, "BAD_FILE")
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'rollback leaves nothing blocking':<46} "
+            f"leftovers={leftovers} BAD_FILE={hasattr(updater, 'BAD_FILE')}"
+        )
+        return ok
+    finally:
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     results = [
         # Proven before: nothing to do, and boot-try is retired.
@@ -107,6 +141,7 @@ def main():
         case("spent chance, no boot-ok -> roll back", "0.1.10", "0.2.0", True, "0.1.10"),
         # First boot of a release: its chance, and no judgement yet.
         case("first boot -> no judgement", "0.1.10", "0.1.10", False, "0.2.0"),
+        case_no_blacklist(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} passed")

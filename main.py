@@ -111,6 +111,27 @@ def firmware_version():
         return "dev"
 
 
+def mark_boot_ok(log):
+    """Record that this release really did come up.
+
+    boot.py's updater compares this against version.txt on the next boot: a
+    release that has had its chance and never wrote it gets the previous tree
+    put back. So it is written HERE and only here - immediately after the
+    banner, the first moment the app has demonstrably started (display built,
+    routines parsed, a frame drawn) - and never earlier, because it means
+    "this came up" and nothing else.
+
+    Losing the write is not worth failing over: the updater's one-chance rule
+    would roll a perfectly good release back on the next boot, which is a much
+    worse outcome than a stale marker, so a failure here is loud but survivable.
+    """
+    try:
+        with open("boot-ok.txt", "w") as fh:
+            fh.write(firmware_version() + "\n")
+    except OSError as exc:  # never take the display down for this
+        log(f"could not record boot-ok ({exc})")
+
+
 def boot_banner(display, log):
     """BOOT / self-test. Also the phase-0 'hello' target."""
     version = firmware_version()
@@ -147,6 +168,7 @@ def main():
         raise
 
     boot_banner(display, log)
+    mark_boot_ok(log)
 
     audio = Audio(display, config)
     ambient = Ambient(display, config)

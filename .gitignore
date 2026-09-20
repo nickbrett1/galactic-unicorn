@@ -55,3 +55,9 @@ update.log
 
 # Python bytecode from the host-side harnesses
 __pycache__/
+
+# device-written OTA state
+boot-ok.txt
+boot-try.txt
+bad.txt
+prev.json

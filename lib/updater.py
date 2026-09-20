@@ -28,6 +28,20 @@ not assumed:
 
 Everything here is fail-soft: any failure leaves the current firmware exactly
 as it was and returns, so main.py runs.
+
+ROLLBACK: boot.py running first is what makes a bad release *repairable*, but
+it is not by itself what makes it *recovered* - measured on hardware, a board
+whose main.py raises just sits at the REPL forever, and repair then waits on
+someone power-cycling it. So there is also a rollback slot:
+
+  * before a release overwrites the tree, the tree is copied to :prev/
+  * main.py writes boot-ok.txt once it has actually come up
+  * the next boot compares the two; a release that has had its single chance
+    and never reported in gets the previous tree put back, offline, and is
+    recorded in bad.txt so it is never adopted again.
+
+That covers the failure mode the drill exposed: a release that dies on a clean
+Python exception, where nothing would otherwise ever reboot the board.
 """
 
 import gc
@@ -44,6 +58,20 @@ WIFI_JOIN_MS = 15000
 LOG_FILE = "update.log"
 MANIFEST_LIMIT = 16384
 
+# --- rollback slot ---------------------------------------------------------
+# What each file means. All are tiny and all are device-written.
+#   version.txt   the release that is running now (written LAST by an apply)
+#   boot-ok.txt   the release that has PROVEN it comes up (written by main.py)
+#   boot-try.txt  the release that has had its one chance at booting
+#   bad.txt       a release that failed and was rolled back; never applied again
+#   prev.json     what the rollback copy is: {version, files, managed}
+PREV_DIR = ":prev"
+PREV_INFO = "prev.json"
+BOOT_OK_FILE = "boot-ok.txt"
+BOOT_TRY_FILE = "boot-try.txt"
+BAD_FILE = "bad.txt"
+UNKNOWN_VERSION = "dev"
+
 
 def _log(message, exc=None):
     line = message if exc is None else message + ": " + repr(exc)
@@ -56,17 +84,38 @@ def _log(message, exc=None):
 
 
 def _hexdigest(digest):
-    import ubinascii
+    try:
+        import ubinascii
 
-    return ubinascii.hexlify(digest.digest()).decode()
+        return ubinascii.hexlify(digest.digest()).decode()
+    except ImportError:  # pragma: no cover - host-side testing only
+        # The board has no hexdigest(); the host has no ubinascii. Same value.
+        return digest.hexdigest()
+
+
+def _read(name):
+    """Contents of a small state file, or "" if it is not there."""
+    try:
+        with open(name) as fh:
+            return fh.read().strip()
+    except Exception:  # noqa: BLE001 - absent and unreadable are the same here
+        return ""
+
+
+def _write(name, text):
+    with open(name, "w") as fh:
+        fh.write(text + "\n")
+
+
+def _clear(name):
+    try:
+        os.remove(name)
+    except OSError:
+        pass
 
 
 def _local_version():
-    try:
-        with open(VERSION_FILE) as fh:
-            return fh.read().strip()
-    except Exception:  # noqa: BLE001
-        return ""
+    return _read(VERSION_FILE)
 
 
 def _join_wifi(config):
@@ -243,15 +292,138 @@ def _reset():
         machine.reset()
 
 
+def _has_rollback():
+    """True if there is a rollback copy. Missing and unreadable are the same."""
+    try:
+        os.listdir(PREV_DIR)
+        return True
+    except OSError:
+        return False
+
+
+def _archive_current(version, managed):
+    """Copy the live tree into :prev before a release overwrites it.
+
+    This is the rollback slot, and it must live on FLASH: the whole point is to
+    recover from a release that never comes up, and that must not depend on the
+    network which delivered it, nor on the owner being in the room.
+
+    `managed` is the incoming release's file list - exactly the set that is
+    about to be replaced - and is recorded so a rollback can also delete any
+    file the bad release ADDED, leaving the previous tree's shape and not a mix.
+    """
+    import hashlib
+
+    _rmtree(PREV_DIR)
+    entries = []
+    for path in managed:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            continue  # not on the device yet, so there is nothing to put back
+        dest = PREV_DIR + "/" + path
+        _mkdirs(dest)
+        with open(dest, "wb") as out:
+            out.write(data)
+        entries.append({"path": path, "sha256": _hexdigest(hashlib.sha256(data))})
+    with open(PREV_INFO, "w") as fh:
+        json.dump({"version": version, "files": entries, "managed": list(managed)}, fh)
+    return entries
+
+
+def _rollback(failed):
+    """Put the previous tree back. Offline, and verified before anything moves.
+
+    Same discipline as an apply: hash the whole copy first, then rename, then
+    update version.txt. A corrupt rollback copy must not be half-applied on top
+    of a tree that is already broken.
+    """
+    import hashlib
+
+    with open(PREV_INFO) as fh:
+        info = json.load(fh)
+    entries = info["files"]
+    restored = set()
+    for entry in entries:
+        with open(PREV_DIR + "/" + entry["path"], "rb") as fh:
+            data = fh.read()
+        if _hexdigest(hashlib.sha256(data)) != entry["sha256"]:
+            raise ValueError("rollback copy of " + entry["path"] + " is corrupt")
+        restored.add(entry["path"])
+    # Files the failed release added are removed, so the tree is the previous
+    # release's shape rather than a mixture of the two.
+    for path in info.get("managed", []):
+        if path not in restored:
+            _clear(path)
+    for entry in entries:
+        dest = PREV_DIR + "/" + entry["path"]
+        _mkdirs(entry["path"])
+        os.rename(dest, entry["path"])
+    _write(VERSION_FILE, info["version"] or UNKNOWN_VERSION)
+    _write(BAD_FILE, failed)
+    _clear(BOOT_TRY_FILE)
+    _clear(PREV_INFO)
+    _rmtree(PREV_DIR)
+    return info["version"]
+
+
+def _recover():
+    """Decide whether the running release deserves to stay. Offline.
+
+    Returns True if the previous tree was restored. Three states, judged from
+    two small files:
+
+      boot-ok == version   it has come up before; nothing to do
+      boot-try != version  this is its FIRST boot - give it the one chance
+      boot-try == version  it has had that chance and still has not reported
+                           in, so it never came up: put the previous tree back
+
+    The whole thing is gated on a rollback copy existing. That is not just an
+    optimisation: it also means the protocol only engages for trees this
+    updater installed, so a tree deployed over USB - which may predate
+    boot-ok.txt entirely - is never judged by rules it cannot satisfy.
+    """
+    version = _read(VERSION_FILE)
+    if not version:
+        return False  # not OTA-managed at all yet
+    if _read(BOOT_OK_FILE) == version:
+        if _read(BOOT_TRY_FILE):  # proven: stop calling it a pending attempt
+            _clear(BOOT_TRY_FILE)
+        return False
+    if not _has_rollback():
+        return False
+    if _read(BOOT_TRY_FILE) != version:
+        _write(BOOT_TRY_FILE, version)
+        return False
+    previous = _rollback(version)
+    _log(
+        "rolled back from "
+        + version
+        + " (it never came up) to "
+        + (previous or UNKNOWN_VERSION)
+    )
+    return True
+
+
 def _update(config):
     base = config.UPDATE_MANIFEST_URL.rsplit("/", 1)[0]
     manifest = json.loads(_get_text(config.UPDATE_MANIFEST_URL))
     version = manifest["version"]
-    if version == _local_version():
+    current = _local_version()
+    if version == current:
+        return False
+    # A release that already failed to come up must never be adopted again, or
+    # the board would roll back to it and forward onto it forever.
+    if version == _read(BAD_FILE):
+        _log("skipping " + version + ": already rolled back from it")
         return False
     pack = manifest["pack"]
     size = _download(base + "/" + pack["file"], PACK_PATH, pack["sha256"])
     written = _unpack(manifest["files"])
+    # Only now - new pack downloaded, every file verified in :next/ - spend the
+    # flash on a rollback copy of the tree we are about to replace.
+    _archive_current(current or UNKNOWN_VERSION, [e["path"] for e in manifest["files"]])
     _apply(written, version)
     _log("applied " + version + " (" + str(size) + " bytes, " + str(len(written)) + " files)")
     # Housekeeping must never be able to undo a good apply: the firmware is
@@ -272,6 +444,21 @@ def run():
 
         if not getattr(config, "UPDATE_ENABLED", False):
             return False
+    except Exception as exc:  # noqa: BLE001 - must never stop main.py
+        _log("cannot start update, skipping", exc)
+        return False
+
+    # Phase 1: recovery. FIRST, and deliberately before the wifi join - a board
+    # whose release never came up must be repaired without the network that
+    # delivered it, and without waiting on one that may not be there.
+    try:
+        if _recover():
+            return False  # previous tree is back; this boot can run it as-is
+    except Exception as exc:  # noqa: BLE001 - a failed recovery still boots
+        _log("recovery failed", exc)
+
+    # Phase 2: update.
+    try:
         if not _join_wifi(config):
             _log("no wifi, skipping update")
             return False

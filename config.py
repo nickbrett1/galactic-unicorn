@@ -24,8 +24,8 @@ CHIP = "rp2040"
 # Display
 # ---------------------------------------------------------------------------
 
-# Brightness ceiling. Full white at max draws just over 1 A, and the HANDOFF
-# screen is deliberately a big green fill, so keep the ceiling sensible.
+# Brightness ceiling. Full white at max draws just over 1 A, and COUNTDOWN
+# ends with the whole panel lit green, so keep the ceiling sensible.
 BRIGHTNESS_AMBIENT = 0.10
 BRIGHTNESS_PROMPT = 0.45
 BRIGHTNESS_COUNTDOWN = 0.45
@@ -43,7 +43,11 @@ LIGHT_DIM = 400
 # ---------------------------------------------------------------------------
 
 VOLUME = 0.5
-AUDIO_ENABLED = True
+# Master audio switch: when False no synth channel is created at all, so
+# nothing can play (boot, PROMPT, HANDOFF, volume buttons all no-op).
+# Turned OFF 2026-09-19 for silent panel-glance work; flip back to True to
+# re-enable the per-routine motifs.
+AUDIO_ENABLED = False
 
 # ---------------------------------------------------------------------------
 # Timings (milliseconds)
@@ -51,6 +55,11 @@ AUDIO_ENABLED = True
 
 PROMPT_MS = 3000
 HANDOFF_MS = 10000
+
+# DEMO: compress every countdown to this many seconds, so the whole transition
+# can be watched quickly. 0 = use each routine's real `minutes` (normal use).
+# Set for the 2026-09-19 first look; set back to 0 afterwards.
+DEMO_SECONDS = 10
 
 # D cancels instantly in every active state (decision 11). Set D_CANCEL_HOLD_MS
 # above 0 to require a short hold instead - the recorded fallback if a toddler
@@ -63,19 +72,6 @@ CANCEL_HOLD_MS = 2000
 # Hold a routine button during COUNTDOWN for this long -> +2 minutes.
 EXTEND_HOLD_MS = 1000
 EXTEND_MINUTES = 2
-
-# Final stretch that pulses green and escalates.
-FINAL_STRETCH_S = 30
-
-# Which of the two candidate COUNTDOWN layouts (memo section 8) to render:
-#   "A" - big digits on the left, routine label top-right, full-width draining
-#         bar along the bottom two rows. (recommended)
-#   "B" - the whole background IS the bar: full 11-row height, draining
-#         left -> right, digits overlaid. More dramatic, and the screen
-#         literally becomes green as the bar empties.
-# Prototype both side by side with `scripts/showcase.py`, then set this once and
-# forget it - switching is a one-line change and needs no reflash of logic.
-COUNTDOWN_LAYOUT = "A"
 
 # ---------------------------------------------------------------------------
 # Ambient clock (best-effort NTP; the countdown never touches the network)

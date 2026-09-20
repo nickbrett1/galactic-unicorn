@@ -7,8 +7,9 @@ a broker. An MQTT blip (phase 2) is therefore invisible mid-countdown.
 
 import time
 
-import digits
-from display import BLACK, ramp_rgb
+import bigfont
+import icons
+from display import GREEN, HEIGHT, WHITE, WIDTH, traffic_rgb
 
 AMBIENT = "ambient"
 PROMPT = "prompt"
@@ -16,9 +17,13 @@ COUNTDOWN = "countdown"
 HANDOFF = "handoff"
 OFF = "off"
 
-COUNTDOWN_LABEL_RGB = (60, 70, 90)
-HANDOFF_TEXT_RGB = (0, 0, 0)
-HANDOFF_FLASH_MS = 2500
+# PROMPT/SELECTION is plain white: maximum contrast on the dark panel, and it
+# stays out of the way of the traffic-light countdown. GREEN is reserved for
+# the payoff, so green only ever means "go".
+SELECTION_RGB = WHITE
+HANDOFF_RGB = GREEN
+HANDOFF_FLASH_MS = 250
+ICON_GAP = 2
 
 # Prompt button order, front and centre.
 ROUTINE_BUTTONS = ("A", "B", "C")
@@ -30,6 +35,22 @@ def _scale(rgb, f):
     elif f < 0.0:
         f = 0.0
     return (int(rgb[0] * f), int(rgb[1] * f), int(rgb[2] * f))
+
+
+def _serpentine_path():
+    """Every LED, in the order the countdown lights them.
+
+    Down the screen, then one column to the right, repeatedly (memo section
+    4a): the fill grows from the left-hand edge rightward, and within each
+    column every LED gets its own moment. That is the "each LED is part of the
+    timer" animation, and it ends with the whole panel lit under the traffic
+    light.
+    """
+    path = []
+    for x in range(WIDTH):
+        for y in range(HEIGHT):
+            path.append((x, y))
+    return path
 
 
 class Engine:
@@ -47,6 +68,9 @@ class Engine:
         self.total_ms = 0
         self.end_ticks = 0
         self.state_started = time.ticks_ms()
+
+        self.path = _serpentine_path()
+        self.path_len = len(self.path)
 
     # -- helpers ---------------------------------------------------------
 
@@ -80,7 +104,12 @@ class Engine:
     def start_countdown(self, now):
         if self.routine is None:
             return
-        self.total_ms = int(self.routine.get("minutes", 5)) * 60 * 1000
+        total_ms = int(self.routine.get("minutes", 5)) * 60 * 1000
+        if self.config.DEMO_SECONDS > 0:
+            # Demo mode: a real run, compressed - so the whole transition can
+            # be watched in seconds rather than minutes.
+            total_ms = int(self.config.DEMO_SECONDS) * 1000
+        self.total_ms = total_ms
         self.end_ticks = time.ticks_add(now, self.total_ms)
         self._enter(COUNTDOWN, now)
 
@@ -163,156 +192,77 @@ class Engine:
 
     # -- rendering -------------------------------------------------------
 
-    def _render_prompt(self, now):
+    def _draw_selection(self, age_ms, rgb, blank=False):
+        """The one selection screen: the animated icon and the big label,
+        centred together as a group.
+
+        Both fill the full panel height (11 px), so there is no lopsided
+        margin top or bottom. Used by PROMPT and by HANDOFF (which is the same
+        picture in green), so "it flashes the icon too" needs no second
+        drawing routine.
+        """
         d = self.display
-        routine = self.routine
-        age = time.ticks_diff(now, self.state_started)
-        reveal = age / float(self.config.PROMPT_MS)
-        rgb = _scale((0, 150, 150), 0.4 + 0.6 * reveal)
         d.clear()
+        if blank:
+            d.update()
+            return
+        routine = self.routine
         label = routine.get("label", "")
-        w = d.text_width(label, scale=1)
-        if w > d.width:
-            # Long labels scroll rather than clip.
-            x = d.width - int((w + d.width) * reveal)
-        else:
-            x = (d.width - w) // 2
-        d.text(label, x, (d.height - 8) // 2, rgb=rgb, scale=1)
+        icon_x = 0
+        text_x = 0
+        span = icons.ICON_W + ICON_GAP + bigfont.text_width(label)
+        if 0 < span <= d.width:
+            icon_x = (d.width - span) // 2
+            text_x = icon_x + icons.ICON_W + ICON_GAP
+        icons.draw_icon(d, routine.get("symbol", "tap"), icon_x, 0, age_ms, rgb=rgb)
+        bigfont.draw_text(d, text_x, 0, label, rgb=rgb)
         d.update()
+
+    def _render_prompt(self, now):
+        age = time.ticks_diff(now, self.state_started)
+        reveal = age / float(self.config.PROMPT_MS) if self.config.PROMPT_MS else 1.0
+        reveal = min(reveal, 1.0)
+        # Fades up as it appears: a sign arriving, not a warning.
+        self._draw_selection(age, _scale(SELECTION_RGB, 0.45 + 0.55 * reveal))
 
     def _render_countdown(self, now):
+        """No digits, no label, no icon: just the panel filling up.
+
+        One LED at a time, down the screen and then to the left, in a traffic
+        light that ends on a full, bright green - so the *end* of the wait is
+        the most noticeable thing on the panel, exactly when the routine is
+        about to start.
+        """
         d = self.display
         remaining = self.remaining_ms(now)
-        remaining_s = remaining / 1000.0
-        total_s = self.total_ms / 1000.0
-        rgb = ramp_rgb(remaining_s, total_s)
-
-        # Final stretch: slow pulse, pace increasing (the only "hurry" signal).
-        pulse = 1.0
-        if remaining_s <= self.config.FINAL_STRETCH_S:
-            frac = (self.config.FINAL_STRETCH_S - remaining_s) / float(
-                self.config.FINAL_STRETCH_S
-            )
-            period = 1000 - 600 * frac  # 1000 ms -> 400 ms
-            phase = (now % int(period)) / float(period)
-            tri = phase * 2 if phase < 0.5 else 2 - phase * 2
-            pulse = 0.65 + 0.35 * tri
-
-        pen_rgb = _scale(rgb, pulse)
-
-        # Digits: minutes normally, seconds in the last minute.
-        if remaining > 60000:
-            value = (remaining + 59999) // 60000
-            value = min(value, 99)
+        if self.total_ms > 0:
+            progress = 1.0 - remaining / float(self.total_ms)
         else:
-            value = (remaining + 999) // 1000
+            progress = 1.0
+        if progress < 0.0:
+            progress = 0.0
+        elif progress > 1.0:
+            progress = 1.0
+
+        # Quiet at the start, full colour at the end.
+        rgb = _scale(traffic_rgb(progress), 0.55 + 0.45 * progress)
+        lit = int(progress * self.path_len + 0.5)
 
         d.clear()
-        if self.config.COUNTDOWN_LAYOUT == "B":
-            self._render_countdown_b(remaining_s, total_s, value, pen_rgb)
-        else:
-            self._render_countdown_a(remaining_s, total_s, value, pen_rgb)
+        d.use(rgb)
+        path = self.path
+        for i in range(lit):
+            x, y = path[i]
+            d.pixel(x, y)
         d.update()
 
-    def _countdown_ratio(self, remaining_s, total_s):
-        return remaining_s / total_s if total_s else 0.0
-
-    def _render_countdown_a(self, remaining_s, total_s, value, pen_rgb):
-        """Layout A (memo section 8, recommended).
-
-        Big digits on the left, routine label top-right, full-width draining
-        bar along the bottom two rows.
-        """
-        d = self.display
-        digits.draw_number(d, 1, 0, 6, 9, 2, value, gap=2, rgb=pen_rgb)
-
-        # Routine label top-right, dim - it is there for the parent.
-        label = self.routine.get("label", "")
-        lw = d.text_width(label, scale=1)
-        if lw <= d.width:
-            d.text(label, d.width - lw - 1, 0, rgb=COUNTDOWN_LABEL_RGB, scale=1)
-
-        digits.draw_bar(
-            d,
-            0,
-            9,
-            d.width,
-            2,
-            self._countdown_ratio(remaining_s, total_s),
-            rgb=pen_rgb,
-            bg_rgb=(6, 8, 12),
-        )
-
-    def _render_countdown_b(self, remaining_s, total_s, value, pen_rgb):
-        """Layout B (memo section 8, bolder): the whole background is the bar.
-
-        Full 11-row height, draining left -> right, with the digits overlaid.
-        The pen for each overlay is chosen by whether the bar still reaches it:
-        over the bar the glyphs are cut out in black (it is bright there at
-        every point on the ramp), and once the bar has drained past them they
-        take the ramp pen on the dark background. That keeps the number legible
-        at every ratio without a second colour grammar.
-        """
-        d = self.display
-        field_w = digits.draw_bg_bar(
-            d,
-            0,
-            0,
-            d.width,
-            d.height,
-            self._countdown_ratio(remaining_s, total_s),
-            rgb=pen_rgb,
-            dim_rgb=(6, 8, 12),
-        )
-
-        text = f"{int(value)}"
-        span = digits.number_width(len(text), 6, gap=2)
-        digits.draw_number(
-            d,
-            1,
-            0,
-            6,
-            9,
-            2,
-            value,
-            gap=2,
-            rgb=BLACK if field_w > 1 + span else pen_rgb,
-        )
-
-        label = self.routine.get("label", "")
-        lw = d.text_width(label, scale=1)
-        if lw <= d.width:
-            lx = d.width - lw - 1
-            d.text(
-                label,
-                lx,
-                0,
-                rgb=BLACK if field_w > lx + lw else COUNTDOWN_LABEL_RGB,
-                scale=1,
-            )
-
     def _render_handoff(self, now):
-        d = self.display
+        """The payoff, back where it started: the prompt's icon *and* label,
+        now flashing green. No inverted flood - flashing is the whole event.
+        """
         age = time.ticks_diff(now, self.state_started)
-        msg = self.routine.get("end_message", "GO!")
-        if age < self.config.HANDOFF_MS:
-            if age < HANDOFF_FLASH_MS:
-                # Phase 1: the message flashes large.
-                on = (age // 250) % 2 == 0
-                d.clear()
-                if on:
-                    mw = d.text_width(msg, scale=1)
-                    if mw <= d.width:
-                        x = (d.width - mw) // 2
-                    else:
-                        x = d.width - int((mw + d.width) * ((age % 1200) / 1200.0))
-                    d.text(msg, x, (d.height - 8) // 2, rgb=(0, 220, 60), scale=1)
-                d.update()
-            else:
-                # Phase 2: the screen floods green - the brightest state we reach.
-                d.clear((0, 255, 48))
-                d.text(msg, 1, (d.height - 8) // 2, rgb=HANDOFF_TEXT_RGB, scale=1)
-                d.update()
+        on = (age // HANDOFF_FLASH_MS) % 2 == 0
+        self._draw_selection(age, HANDOFF_RGB, blank=not on)
 
     def _render_off(self):
         self.display.clear((0, 0, 0))

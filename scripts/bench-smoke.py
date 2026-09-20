@@ -75,7 +75,7 @@ check("geometry", lambda: f"{display_mod.WIDTH}x{display_mod.HEIGHT}")
 
 from ambient import Ambient
 from buttons import Buttons
-from display import Display, ramp_rgb
+from display import Display, traffic_rgb
 from routine import Engine
 from sound import Audio
 
@@ -86,24 +86,29 @@ d = Display(config)
 check("construct Display", lambda: f"brightness={d.gu.get_brightness():.2f}")
 check("light()", lambda: f"{d.light():.1f}")
 
-# -- colour ramp (section 4a: green means go) -------------------------------
+# -- colour ramp (section 4a: traffic light, green means go) ----------------
 def ramp_probe():
-    samples = [1.0, 0.7, 0.4, 0.25, 0.1, 0.0]
-    out = []
-    for r in samples:
-        out.append(f"{r:.2f}->{ramp_rgb(300 * r, 300)}")
-    return " ".join(out)
+    samples = [0.0, 0.25, 0.5, 0.75, 1.0]
+    return " ".join(f"{p:.2f}->{traffic_rgb(p)}" for p in samples)
 
 
-check("ramp_rgb spans blue->teal->green", ramp_probe)
+check("traffic_rgb spans red->amber->green", ramp_probe)
 
-def green_at_zero():
-    r, g, b = ramp_rgb(0, 300)
-    assert g > 200 and r < 60 and b < 100, f"zero is not green: {(r, g, b)}"
+def green_at_one():
+    r, g, b = traffic_rgb(1.0)
+    assert g > 200 and r < 60 and b < 100, f"the end is not green: {(r, g, b)}"
     return f"{r, g, b}"
 
 
-check("zero is fully green", green_at_zero)
+check("the end is fully green", green_at_one)
+
+def red_at_zero():
+    r, g, b = traffic_rgb(0.0)
+    assert r > 200 and g < 80, f"the start is not red: {(r, g, b)}"
+    return f"{r, g, b}"
+
+
+check("the start is red", red_at_zero)
 
 # -- routines.json ----------------------------------------------------------
 import json
@@ -269,12 +274,11 @@ def frame_cost():
 
 check("countdown frame rate", frame_cost)
 
-# -- countdown layouts (memo section 8: both candidates must render) --------
-def layout_b_renders():
+# -- countdown fill (the whole panel, one LED at a time) --------------------
+def countdown_renders():
     engine.routine = engine._by_id("bathtime")
     engine.total_ms = 5 * 60 * 1000
     engine.state = "countdown"
-    config.COUNTDOWN_LAYOUT = "B"
     try:
         for frac in (1.0, 0.5, 0.1):
             engine.state_started = time.ticks_ms()
@@ -283,23 +287,54 @@ def layout_b_renders():
             )
             engine.tick(time.ticks_ms())
     finally:
-        config.COUNTDOWN_LAYOUT = "A"
         engine.cancel(time.ticks_ms())
-    return "layout B drew at 100/50/10%"
+    return "countdown drew at 0/50/90% done"
 
 
-check("layout B (full-background bar) renders", layout_b_renders)
+check("countdown renders at start/middle/end", countdown_renders)
 
 
-def bg_bar_geometry():
-    w_full = digits.draw_bg_bar(d, 0, 0, d.width, d.height, 1.0, rgb=(0, 255, 48))
-    w_empty = digits.draw_bg_bar(d, 0, 0, d.width, d.height, 0.0, rgb=(0, 255, 48))
-    assert w_full == d.width, f"full bar is {w_full}, expected {d.width}"
-    assert w_empty == 0, f"empty bar is {w_empty}, expected 0"
-    return f"full={w_full} empty={w_empty}"
+def serpentine_covers_panel():
+    path = engine.path
+    assert len(path) == d.width * d.height, f"path has {len(path)} LEDs"
+    assert len(set(path)) == len(path), "an LED is lit twice"
+    assert path[0] == (0, 0), f"the fill starts at {path[0]}"
+    assert path[-1] == (d.width - 1, d.height - 1), f"the fill ends at {path[-1]}"
+    # Down the screen first, then one column to the right.
+    assert path[1] == (0, 1), f"second LED is {path[1]}"
+    assert path[d.height] == (1, 0), f"next column starts at {path[d.height]}"
+    return f"{len(path)} LEDs, top-left -> bottom-right"
 
 
-check("draw_bg_bar spans the full width / empties to zero", bg_bar_geometry)
+check("countdown path covers the panel down-then-right", serpentine_covers_panel)
+
+# -- icons (frames must be X/. or the icon silently draws nothing) ----------
+import icons
+
+
+def icon_frames_valid():
+    for name, frames in icons.ICONS.items():
+        assert frames, f"{name} has no frames"
+        for fr in frames:
+            assert len(fr) == icons.ICON_H, f"{name}: {len(fr)} rows, want {icons.ICON_H}"
+            for row in fr:
+                assert len(row) == icons.ICON_W, f"{name}: row is {len(row)} wide"
+                assert set(row) <= {"X", "."}, f"{name}: bad ink {sorted(set(row))}"
+    return f"{len(icons.ICONS)} icons, all {icons.ICON_W}x{icons.ICON_H}"
+
+
+check("icon frames use only X/. and are the right size", icon_frames_valid)
+
+
+def every_symbol_resolves():
+    for r in routines:
+        sym = r.get("symbol")
+        assert sym in icons.ICONS, f"{r.get('id')}: symbol {sym!r} has no icon"
+    return ", ".join(f"{r['id']}->{r['symbol']}" for r in routines)
+
+
+check("every routine's symbol names a real icon", every_symbol_resolves)
+
 
 d.clear()
 d.update()

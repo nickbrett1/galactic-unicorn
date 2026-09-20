@@ -9,17 +9,17 @@
   "routines": [
     {
       "id": "bathtime",
-      "label": "Bathtime",
+      "label": "Bath",
       "kind": "lead-in",
       "minutes": 5,
       "button": "A",
-      "symbol": "duck",
+      "symbol": "bath",
       "tune": "motif1",
       "end_message": "BATHTIME!"
     },
     {
       "id": "booktime",
-      "label": "Book time",
+      "label": "Book",
       "kind": "lead-in",
       "minutes": 5,
       "button": "B",
@@ -29,11 +29,11 @@
     },
     {
       "id": "cleanup",
-      "label": "Cleanup",
+      "label": "Clean",
       "kind": "lead-in",
       "minutes": 3,
       "button": "C",
-      "symbol": "toy-box",
+      "symbol": "brush",
       "tune": "motif3",
       "end_message": "CLEAN UP!"
     }

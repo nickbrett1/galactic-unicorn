@@ -50,9 +50,10 @@ SWITCHES = {
     "D": SWITCH_D,
 }
 
-# Colour ramp anchors (memo section 4a: green means go).
-BLUE = (0, 58, 160)
-TEAL = (0, 150, 150)
+# Colour ramp anchors. The COUNTDOWN is a traffic light (memo section 4a:
+# green means go), and it ends on the brightest green we draw.
+RED = (255, 32, 0)
+AMBER = (255, 140, 0)
 GREEN = (0, 255, 48)
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -72,26 +73,21 @@ def lerp_rgb(c0, c1, t):
     return (_lerp(c0[0], c1[0], t), _lerp(c0[1], c1[1], t), _lerp(c0[2], c1[2], t))
 
 
-def ramp_rgb(remaining_s, total_s):
-    """Colour for a countdown with `remaining_s` left of `total_s`.
+def traffic_rgb(progress):
+    """Traffic-light colour for a countdown that is `progress` (0..1) done.
 
-    Inverted from v0 on purpose: red is not used at all. Blue -> teal is
-    low-arousal and easy to ignore; teal -> green is where the screen starts
-    to mean something; the final stretch is full green. The end of the
-    countdown is the visual peak, because that is the moment the routine
-    *begins*.
+    Red -> amber -> green, so the colour *ends* on green: the moment the
+    routine begins is the most noticeable moment on the panel, which is the
+    whole point of the countdown. (The first pass went blue -> teal -> green,
+    which is far too similar at the low end to read as a gradient at all.)
     """
-    if total_s <= 0:
+    if progress <= 0.0:
+        return RED
+    if progress >= 1.0:
         return GREEN
-    ratio = remaining_s / float(total_s)
-    if ratio > 0.4:
-        # 100% -> 40%: blue -> teal, low brightness
-        return lerp_rgb(BLUE, TEAL, (1.0 - ratio) / 0.6)
-    if ratio > 0.1:
-        # 40% -> 10%: teal -> green, steady brightening
-        return lerp_rgb(TEAL, GREEN, (0.4 - ratio) / 0.3)
-    # final stretch: full green
-    return GREEN
+    if progress < 0.5:
+        return lerp_rgb(RED, AMBER, progress / 0.5)
+    return lerp_rgb(AMBER, GREEN, (progress - 0.5) / 0.5)
 
 
 class Display:

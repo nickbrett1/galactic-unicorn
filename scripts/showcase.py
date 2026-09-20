@@ -6,9 +6,9 @@ long enough to actually look at it, and prints a label to the REPL so you know
 what you are looking at:
 
     hello banner
-      -> COUNTDOWN, layouts A and B, at 100% / 50% / 10% remaining
-      -> PROMPT for each routine (so you hear each motif)
-      -> HANDOFF for each routine (flash, then the green flood)
+      -> COUNTDOWN at 100% / 50% / 90% done (red -> amber -> green)
+      -> PROMPT for each routine (icon + big label; you hear each motif)
+      -> HANDOFF for each routine (icon + label flashing green)
       -> NTP sync + the ambient clock
       -> a button-identity sweep (which physical cap is A/B/C/D)
 
@@ -127,10 +127,9 @@ def run(ms, poll_ms=20):
         time.sleep_ms(poll_ms)
 
 
-def show_countdown(fraction, layout, note, ms=4000):
-    """Freeze a countdown at a known point through its run, in a given layout."""
-    banner(f"COUNTDOWN - layout {layout} - {note}")
-    config.COUNTDOWN_LAYOUT = layout
+def show_countdown(fraction, note, ms=4000):
+    """Freeze a countdown at a known point through its run."""
+    banner(f"COUNTDOWN - {note}")
     engine.routine = BATHTIME
     engine.total_ms = int(BATHTIME.get("minutes", 5)) * 60 * 1000
     engine.state = COUNTDOWN
@@ -138,7 +137,7 @@ def show_countdown(fraction, layout, note, ms=4000):
     engine.end_ticks = time.ticks_add(
         time.ticks_ms(), int(engine.total_ms * float(fraction))
     )
-    log(f"layout {layout}, bathtime, {note} of a 5 min countdown")
+    log(f"bathtime, {note} of a 5 min countdown")
     run(ms)
     # A beat of black between screens, so the next one reads as a fresh look
     # rather than a continuation of the one before it.
@@ -150,7 +149,7 @@ def show_countdown(fraction, layout, note, ms=4000):
 print()
 print("galactic-unicorn showcase")
 log(f"{len(routines)} routines, buttons={button_map}")
-log("layout A vs B, then prompts, handoffs, clock, button sweep")
+log("countdown, then prompts, handoffs, clock, button sweep")
 if REAL_DARK:
     log(
         f"note: the room reads dark (light()={display.light():.0f} < "
@@ -163,26 +162,20 @@ if RUN_TOUR:
     banner("BOOT / hello  (the phase-0 target, and what runs on every boot)")
     boot_banner(display, log)
 
-    # -- 2. countdown, both layouts, three points through the run -----------
-    banner("COUNTDOWN - the money screen, both candidate layouts")
-    log("layout A: big digits left, label top-right, bar along the bottom 2 rows")
-    log("layout B: the whole background is the bar, digits cut out of it")
-    log("the thing to judge: with B the panel is a full-screen colour from the")
-    log("brighter as it goes green. A is much quieter early - mostly dark,")
-    log("one number, a thin bar. Decide which one you want living in the room.")
-    log("also watch for this in B: the number is cut out of the bar in black")
-    log("until the bar drains past it (~28% left), then flips to glowing in")
-    log("front of it. Is that flip a nice moment or a lurch?")
+    # -- 2. countdown, three points through the run -------------------------
+    banner("COUNTDOWN - the money screen")
+    log("one LED at a time, down the screen and then to the left, in a")
+    log("traffic light that ends on a full, bright green. No digits, no")
+    log("label, no icon - the panel filling up IS the timer.")
+    log("the thing to judge: is red -> amber -> green a clear gradient, and is")
+    log("the end (full green) the most noticeable moment of the whole wait?")
     print()
-    for layout in ("A", "B"):
-        print(f"--- LAYOUT {layout} ---")
-        show_countdown(1.0, layout, "100% left (5 min) - blue, easy to ignore")
-        show_countdown(0.5, layout, "50% left (2 min 30 s) - teal, brightening")
-        show_countdown(0.1, layout, "10% left (30 s) - full green, pulsing")
+    show_countdown(1.0, "just started - red, mostly dark")
+    show_countdown(0.5, "halfway - amber, half the panel")
+    show_countdown(0.1, "nearly done - green, the whole panel lit")
 
     # -- 3. PROMPT, one per routine (this is where you hear the motif) ------
-    banner("PROMPT - ~3 s, the routine's tune plays (listen)")
-    config.COUNTDOWN_LAYOUT = "A"
+    banner("PROMPT - ~3 s of icon + big label (the tune plays; listen)")
     for routine in routines:
         log(f"{routine.get('id')}: label={routine.get('label')!r} "
             f"tune={routine.get('tune')} button={routine.get('button')}")
@@ -194,11 +187,11 @@ if RUN_TOUR:
         time.sleep_ms(400)
 
     # -- 4. HANDOFF, one per routine ---------------------------------------
-    banner("HANDOFF - the payoff screen: it flashes, then floods green")
+    banner("HANDOFF - the payoff: the icon and label flash green")
     log(f"each one really lasts {config.HANDOFF_MS} ms; cut to "
         f"{HANDOFF_SHOW_MS} ms here")
     for routine in routines:
-        log(f"{routine.get('id')}: end_message={routine.get('end_message')!r}")
+        log(f"{routine.get('id')}: label={routine.get('label')!r}")
         now = time.ticks_ms()
         engine.start_prompt(routine.get("id"), now)
         engine.start_countdown(now)

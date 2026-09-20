@@ -109,77 +109,57 @@ BATH = tuple(
     for drip, bubbles in zip(_BATH_DRIP, _BATH_BUBBLES)
 )
 
-# A book, gently rising and falling - for book time.
-BOOK = (
-    (
-        ".XXXXXXXX.",
-        ".X......X.",
-        ".X.XXXX.X.",
-        ".X.XXXX.X.",
-        ".X......X.",
-        ".X.XXXX.X.",
-        ".X.XXXX.X.",
-        ".X......X.",
-        ".XXXXXXXX.",
-        "..........",
-        "..........",
-    ),
-    (
-        "..........",
-        ".XXXXXXXX.",
-        ".X......X.",
-        ".X.XXXX.X.",
-        ".X.XXXX.X.",
-        ".X......X.",
-        ".X.XXXX.X.",
-        ".X.XXXX.X.",
-        ".X......X.",
-        ".XXXXXXXX.",
-        "..........",
-    ),
-    (
-        "..........",
-        "..........",
-        ".XXXXXXXX.",
-        ".X......X.",
-        ".X.XXXX.X.",
-        ".X.XXXX.X.",
-        ".X......X.",
-        ".X.XXXX.X.",
-        ".X.XXXX.X.",
-        ".X......X.",
-        ".XXXXXXXX.",
-    ),
-)
+# A book, open and face-on: a cover edge top and bottom, and pages either side
+# of a centre gutter with text lines on them. The blank column pair down the
+# middle is what makes it read as *open* - the earlier version was one nested
+# rectangle, which looked like the book had been turned ninety degrees.
+_BOOK_COVER = ".XXXXXXXX."
+_BOOK_PAGE = ".X......X."
+_BOOK_LINE = ".XXX..XXX."
+_BOOK_TEXT_ROWS = (2, 4, 6, 8)
 
-# A brush, bristles scrubbing side to side - for cleanup.
-BRUSH = (
-    (
-        "....XX....",
-        "....XX....",
-        "....XX....",
-        "....XX....",
-        "...XXXX...",
-        "..XXXXXX..",
-        ".XXXXXXXX.",
-        "XXXXXXXXXX",
-        "X.X.X.X.X.",
-        "X.X.X.X.X.",
-        ".X.X.X.X..",
-    ),
-    (
-        "....XX....",
-        "....XX....",
-        "....XX....",
-        "....XX....",
-        "...XXXX...",
-        "..XXXXXX..",
-        ".XXXXXXXX.",
-        "XXXXXXXXXX",
-        ".X.X.X.X.X",
-        ".X.X.X.X.X",
-        "X.X.X.X.X.",
-    ),
+
+def _book_frame(lines):
+    """The open book with only its first `lines` text rows written."""
+    written = 0
+    rows = []
+    for r in range(ICON_H):
+        if r in (0, ICON_H - 1):
+            rows.append(_BOOK_COVER)
+        elif r in _BOOK_TEXT_ROWS and written < lines:
+            rows.append(_BOOK_LINE)
+            written += 1
+        else:
+            rows.append(_BOOK_PAGE)
+    return tuple(rows)
+
+
+# Four frames - one line, two, three, four - i.e. the page filling up.
+BOOK = tuple(_book_frame(n) for n in (1, 2, 3, 4))
+
+# Tidying: three toy boxes that slide into a neat stack. The boxes are drawn
+# hollow so they read as crates rather than bars, and the animation carries
+# the meaning on its own - scattered first, then squared away.
+_BOX = ("XXXXX", "X...X", "XXXXX")
+
+
+def _place(x, row):
+    """One row of `_BOX` positioned at column x, padded to the icon width."""
+    return "." * x + row + "." * (ICON_W - x - len(row))
+
+
+def _box_pile(offsets):
+    """Three boxes stacked top to bottom, one at each x offset."""
+    rows = []
+    for i, x in enumerate(offsets):
+        rows.extend(_place(x, row) for row in _BOX)
+        if i < len(offsets) - 1:
+            rows.append("." * ICON_W)
+    return tuple(rows)
+
+
+BOXES = tuple(
+    _box_pile(offsets) for offsets in ((0, 5, 4), (1, 4, 3), (2, 2, 2), (2, 2, 2))
 )
 
 ICONS = {
@@ -187,7 +167,7 @@ ICONS = {
     "tap": TAP,
     "shower": SHOWER,
     "book": BOOK,
-    "brush": BRUSH,
+    "boxes": BOXES,
 }
 
 

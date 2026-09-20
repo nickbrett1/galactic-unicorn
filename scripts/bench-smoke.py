@@ -120,9 +120,9 @@ button_map = data["buttons"]
 
 check("routines.json parses", lambda: f"{len(routines)} routines, {button_map}")
 check(
-    "mapping is A/B/C/D = bathtime/booktime/cleanup/cancel",
+    "mapping is A/B/C/D = bathtime/booktime/tidyup/cancel",
     lambda: button_map
-    if button_map == {"A": "bathtime", "B": "booktime", "C": "cleanup", "D": "cancel"}
+    if button_map == {"A": "bathtime", "B": "booktime", "C": "tidyup", "D": "cancel"}
     else (_ for _ in ()).throw(AssertionError(button_map)),
 )
 
@@ -231,17 +231,17 @@ step("HANDOFF -> AMBIENT automatically (never stuck)", 300, "ambient")
 
 # D cancels from every active state.
 now = time.ticks_ms()
-engine.start_prompt("cleanup", now)
+engine.start_prompt("tidyup", now)
 engine._handle_routine_event("press", "D", time.ticks_ms())
 check("D cancels from PROMPT", lambda: engine.state if engine.state == "ambient" else _bad(engine.state))
 
-engine.start_prompt("cleanup", time.ticks_ms())
+engine.start_prompt("tidyup", time.ticks_ms())
 engine.start_countdown(time.ticks_ms())
 engine._handle_routine_event("press", "D", time.ticks_ms())
 check("D cancels from COUNTDOWN", lambda: engine.state if engine.state == "ambient" else _bad(engine.state))
 
 # Routine buttons are inert during COUNTDOWN.
-engine.start_prompt("cleanup", time.ticks_ms())
+engine.start_prompt("tidyup", time.ticks_ms())
 engine.start_countdown(time.ticks_ms())
 before = engine.end_ticks
 engine._handle_routine_event("press", "A", time.ticks_ms())

@@ -34,7 +34,7 @@ SQUARE 64, NOISE 128), not on GalacticUnicorn.
 MOTIFS = {
     "motif1": [(523, 0.10), (659, 0.10), (784, 0.18)],  # duck: rising thirds
     "motif2": [(587, 0.12), (698, 0.12), (880, 0.20)],  # book: wider rising
-    "motif3": [(659, 0.08), (659, 0.08), (988, 0.20)],  # cleanup: double tap
+    "motif3": [(659, 0.08), (659, 0.08), (988, 0.20)],  # tidyup: double tap
 }
 
 # Handoff resolves the same motif an octave up, on a brighter waveform.

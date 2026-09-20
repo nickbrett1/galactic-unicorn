@@ -28,5 +28,15 @@ try:
 # interrupt during the updater's network phase would then abort the whole boot
 # and main.py would never run. That is rule 1 above being broken by the one
 # thing most likely to happen while someone is standing over the board.
+except SystemExit:
+    # Not a failure: updater._reset() raises SystemExit to ask for the reboot
+    # that starts the firmware it just applied. Reporting it as a skipped
+    # update is what made every SUCCESSFUL apply look like a problem:
+    #
+    #     update: applied 0.1.12 (65181 bytes, 12 files)
+    #     boot: updater skipped: SystemExit()
+    #
+    # Two lines that read as a contradiction, and the first one is the true one.
+    pass
 except BaseException as exc:  # noqa: BLE001
     print("boot: updater skipped:", repr(exc))

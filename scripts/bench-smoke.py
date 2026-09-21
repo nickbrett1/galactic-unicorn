@@ -152,14 +152,16 @@ check("draw_bar 1.0/0.5/0.0", draw_bar_probe)
 # -- audio ------------------------------------------------------------------
 audio = Audio(d, config)
 
-def play_the_chime():
+def play_the_fanfare():
     audio.chime()
-    time.sleep_ms(600)
+    # Long enough for the whole tune: ~1.7 s of notes, then stop it clean.
+    # 600 ms (the old length) cut the fanfare off mid-run.
+    time.sleep_ms(2200)
     audio.stop()
-    return "the time-is-up chime queued without error"
+    return "the time-is-up fanfare played to the end"
 
 
-check("queue the time-is-up chime", play_the_chime)
+check("play the time-is-up fanfare", play_the_fanfare)
 
 
 def audio_channel_live():

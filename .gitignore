@@ -56,6 +56,10 @@ update.log
 # Python bytecode from the host-side harnesses
 __pycache__/
 
+# Audition renders from scripts/render-fanfare.py: a way to HEAR a note list
+# with no board on the wire, not firmware and not an artifact.
+*.wav
+
 # device-written OTA state
 boot-ok.txt
 boot-try.txt

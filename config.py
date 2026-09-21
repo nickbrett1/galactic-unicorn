@@ -44,7 +44,7 @@ LIGHT_DIM = 400
 
 VOLUME = 0.5
 # Master audio switch: when False no synth channel is created at all, so
-# nothing can play (the chime and the volume buttons both no-op). Audio is
+# nothing can play (the fanfare and the volume buttons both no-op). Audio is
 # deliberately minimal when on: see lib/sound.py - the board is silent until
 # a timer expires.
 AUDIO_ENABLED = True

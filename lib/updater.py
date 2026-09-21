@@ -70,6 +70,22 @@ CHUNK = 1024
 # we make, not how long a single one is (see _join_wifi).
 WIFI_ATTEMPT_MS = 10000
 WIFI_ATTEMPTS = 3
+
+# boot.py's budget is ONE of those, deliberately. Its check is the one that
+# runs before main.py can draw, so every second of it is a second of a lit
+# panel with nothing else on it: measured on this board, three attempts cost
+# 32 s of "one pixel" before the HELLO banner, and on the second boot it cost
+# 32 s and then failed anyway ("wifi attempt 1/3 got no IP" ... 3/3), which is
+# what this phase usually does. Its first join also happens while the radio is
+# coldest - the same join from the running app gets an IP in ~4 s - so this is
+# the least productive network call in the firmware.
+#
+# Nothing is lost by shortening it. The update it was trying to fetch is
+# retried from the render loop (check_for_update, on UPDATE_RETRY_MS) with the
+# full WIFI_ATTEMPTS and no panel to darken; and recovery, which is the part
+# that must not wait for a network, runs BEFORE this and touches no radio at
+# all.
+BOOT_WIFI_ATTEMPTS = 1
 LOG_FILE = "update.log"
 MANIFEST_LIMIT = 16384
 
@@ -152,7 +168,7 @@ def _wait_for_ip(wlan, budget_ms):
     return True
 
 
-def _join_wifi(config):
+def _join_wifi(config, attempts=WIFI_ATTEMPTS, attempt_ms=WIFI_ATTEMPT_MS):
     if not config.WIFI_SSID:
         return False
     import network
@@ -169,7 +185,7 @@ def _join_wifi(config):
     # 6/6 on one run and 0/6 three minutes later. So a single attempt is a coin
     # flip, and a retry is what converts it - but the DHCP exchange has to be
     # restarted, which needs a disconnect first.
-    for attempt in range(1, WIFI_ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         if attempt > 1:
             try:
                 wlan.disconnect()
@@ -180,9 +196,9 @@ def _join_wifi(config):
             wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
         except OSError as exc:
             _log("wifi connect raised", exc)
-        if _wait_for_ip(wlan, WIFI_ATTEMPT_MS):
+        if _wait_for_ip(wlan, attempt_ms):
             return True
-        _log(f"wifi attempt {attempt}/{WIFI_ATTEMPTS} got no IP")
+        _log(f"wifi attempt {attempt}/{attempts} got no IP")
     return False
 
 
@@ -617,8 +633,10 @@ def _run():
 
     # Phase 2: update.
     try:
-        if not _join_wifi(config):
-            _log("no wifi, skipping update")
+        # The SHORT budget: this is the call that runs behind a nearly-blank
+        # panel. See BOOT_WIFI_ATTEMPTS.
+        if not _join_wifi(config, attempts=BOOT_WIFI_ATTEMPTS):
+            _log("no wifi at boot, skipping update (the loop retries)")
             return False
     except Exception as exc:  # noqa: BLE001 - must never stop main.py
         _log("cannot start update, skipping", exc)

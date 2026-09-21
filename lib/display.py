@@ -59,6 +59,21 @@ WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 GREY = (40, 44, 52)
 
+# The power lamp: ONE white LED in the top-left corner, lit whenever the unit
+# is powered and no routine has been selected. It is the answer to a question
+# the panel could not previously answer at all - "is this thing on?" - without
+# being a screen: a single dim pixel in the corner reads as an object with a
+# power light, which is what the thing is.
+#
+# Top-left is the one square nothing else uses: the clock, the breathing status
+# pixel, the icon+label selection and the 34 px HELLO banner are all centred,
+# and the banner's leftmost glyph starts at x=9. So this never collides, and it
+# is the same corner boot.py lights before it does anything else (boot.py
+# hard-codes the coordinate - it must not import this file, which arrives over
+# the update channel it exists to repair).
+POWER_PIXEL = (0, 0)
+POWER_RGB = WHITE
+
 
 def _lerp(a, b, t):
     if t < 0.0:
@@ -136,6 +151,16 @@ class Display:
         if rgb is not None:
             self.use(rgb)
         self.graphics.pixel(int(x), int(y))
+
+    def power_pixel(self):
+        """Draw the power lamp. Like every primitive here, does not update().
+
+        Lit by whatever is drawing - boot.py's first frame, main.py's loading
+        frame and banner, and the ambient clock at rest - so the one pixel that
+        means "powered" is continuous from the instant the panel exists until
+        the last LED goes dark, instead of blinking once and vanishing.
+        """
+        self.pixel(POWER_PIXEL[0], POWER_PIXEL[1], rgb=POWER_RGB)
 
     def text(self, s, x, y, rgb=None, scale=1):
         if rgb is not None:

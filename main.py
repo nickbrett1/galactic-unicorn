@@ -4,11 +4,13 @@ MicroPython runs this file on boot. Imports resolve from the filesystem root
 and from lib/, so reusable modules live in lib/ and are imported by their
 module name.
 
-Boot order: a white power-on dot the moment the panel exists -> BOOT self-test
-(a colourful HELLO banner; the applied release is logged and written to the
-wifihealth header) -> best-effort NTP -> the routine loop. Nothing after the
-self-test blocks on the network: the countdown is locally timed and runs with
-WiFi switched off.
+Boot order: a white power pixel the instant the panel exists (boot.py lights it
+before its own look at the network, in case that takes twenty seconds) -> a
+loading frame, the unlit HELLO, while the modules import behind it -> BOOT
+self-test (the same word coloured in letter by letter; the applied release is
+logged and written to the wifihealth header) -> best-effort NTP -> the routine
+loop. Nothing after the self-test blocks on the network: the countdown is
+locally timed and runs with WiFi switched off.
 """
 
 import gc
@@ -26,12 +28,11 @@ from display import (
     SWITCH_VOLUME_DOWN,
     SWITCH_VOLUME_UP,
     SWITCHES,
-    WHITE,
     Display,
 )
 
-# Everything else main.py needs is imported INSIDE main(), behind the power-on
-# dot - see the note there for what that is worth, and the measurement behind
+# Everything else main.py needs is imported INSIDE main(), behind the loading
+# frame - see the note there for what that is worth, and the measurement behind
 # it. `display` cannot move with them: ALL_SWITCHES is built here, from the
 # switch constants, and scripts/showcase.py imports those names from main.
 
@@ -183,52 +184,35 @@ def _draw_hello(display, x, lit):
     drew, so the next letter starts GAP px further on.
     """
     display.clear()
+    display.power_pixel()  # the corner lamp survives the banner
     for i, ch in enumerate(HELLO_WORD):
         rgb = HELLO_COLORS[i % len(HELLO_COLORS)] if i < lit else HELLO_DIM
         x = bigfont.draw_text(display, x, 0, ch, rgb=rgb) + bigfont.GAP
     display.update()
 
 
-# The power-on indicator: a small solid block in the middle of the panel, lit
-# the instant there is a panel to light (see power_on_dot).
-POWER_DOT_PX = 3
-POWER_DOT_ON_MS = 110
-POWER_DOT_OFF_MS = 80
+def loading_frame(display):
+    """Put the finished word on the panel, unlit, while the imports load.
 
+    This is the frame that bridges boot.py's power pixel and the banner's
+    chase-in, and it exists because of where those two sit in time. boot.py
+    hands over a panel with one pixel lit while it takes its look at the
+    network; the banner cannot start until everything below is imported, which
+    is another ~700 ms of blocking work. Drawing the whole word here - dark,
+    but readable - means the panel shows you what is coming instead of holding
+    a single pixel for a beat longer than it has to, and it is exactly the
+    frame the chase-in then colours, so the panel never goes back to black in
+    between.
 
-def power_on_dot(display):
-    """Light the panel as soon as there is a panel to light. Silent.
-
-    The banner cannot be the first sign of life, and neither can anything in
-    boot.py. Before boot_banner can draw a letter, the board still has to
-    import its modules, build the display and read routines.json - and a dark
-    panel is indistinguishable from a board that never started, which is
-    exactly how a power blip and a brick look from the sofa.
-
-    So this is the earliest point that is safe to draw from: main.py is about
-    to run whatever else happens, whereas boot.py is the file that REPAIRS
-    everything else (see its docstring) and must not gain code that can fail
-    before the update phase. What stays dark is therefore boot.py's own look at
-    the network, not this.
-
-    One small white block, blinked once so it reads as "powered on" rather than
-    as a stuck pixel, then left lit while the rest of the boot loads underneath
-    it. boot_banner's first frame clears it, so it hands over rather than
-    disappears.
+    Set at countdown brightness rather than ambient: this is the boot saying
+    something, not furniture. Silent, and one blocking write of one frame.
     """
     display.set_brightness(config.BRIGHTNESS_COUNTDOWN)
-    x = (display.width - POWER_DOT_PX) // 2
-    y = (display.height - POWER_DOT_PX) // 2
-
     display.clear()
-    display.rect(x, y, POWER_DOT_PX, POWER_DOT_PX, rgb=WHITE)
-    display.update()
-    time.sleep_ms(POWER_DOT_ON_MS)
-    display.clear()
-    display.update()
-    time.sleep_ms(POWER_DOT_OFF_MS)
-    display.clear()
-    display.rect(x, y, POWER_DOT_PX, POWER_DOT_PX, rgb=WHITE)
+    display.power_pixel()
+    x = max(0, (display.width - bigfont.text_width(HELLO_WORD)) // 2)
+    for ch in HELLO_WORD:
+        x = bigfont.draw_text(display, x, 0, ch, rgb=HELLO_DIM) + bigfont.GAP
     display.update()
 
 
@@ -251,8 +235,13 @@ def boot_banner(display, log):
         time.sleep_ms(HELLO_STEP_MS)
     _draw_hello(display, x0, len(HELLO_WORD))
     time.sleep_ms(HELLO_HOLD_MS)
-    display.clear()
-    display.update()
+    # Deliberately NOT cleared on the way out. The next thing that draws is the
+    # ambient clock's first frame, and between here and there sit the audio and
+    # ambient constructors and sync_ntp - which is a wifi join, up to ~15 s of
+    # it. Clearing would hand the panel over to that wait in black, which is the
+    # same "and then it's gone" the dot used to do. Finishing on the word and
+    # letting the loop take it from underneath keeps the panel lit all the way
+    # to the resting state.
 
 
 def _checked_under_network_fuse(check, config):
@@ -310,7 +299,7 @@ def main():
 
     try:
         display = Display(config)
-        power_on_dot(display)
+        loading_frame(display)
         # The panel is lit the moment it exists, and everything expensive is
         # loaded BEHIND that light rather than in front of it. These are the
         # modules deferred out of the top of the file, measured cold on the

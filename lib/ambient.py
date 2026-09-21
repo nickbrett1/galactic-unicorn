@@ -6,6 +6,13 @@ shared-room furniture and should read as an object, not as a screen.
 The clock is best-effort. If NTP never landed, the screen shows a slow
 breathing status pixel instead, so a network problem looks like "quiet",
 never like "broken".
+
+One thing here is NOT best-effort: the power lamp in the top-left corner
+(lib/display.py: POWER_PIXEL). It is lit whenever the unit is on and no routine
+has been selected, so "is this thing even powered?" no longer has to be
+answered by looking at the router. It shares the dark-room rule with everything
+else - in a dark room routine.tick() blanks the panel outright and the lamp
+goes with it, because furniture should not glow in a child's bedroom.
 """
 
 import time
@@ -59,6 +66,16 @@ class Ambient:
     def draw(self, phase_ms):
         d = self.display
         d.clear()
+        # The one thing here that is not a function of the network: a corner
+        # lamp saying "this unit has power", lit for as long as no routine has
+        # been selected. The clock below it is best-effort and the breathing
+        # pixel below THAT is what a failed NTP looks like - so on a bad night
+        # the status pixel is ambiguous (working radio? dead one? board even
+        # on?) and this is the pixel that is not. It is also the frame boot.py
+        # drew before anything else and main.py kept lit through the banner, so
+        # the panel is never once completely dark between power-on and the
+        # countdown - not for a boot, and not for a clock that did not sync.
+        d.power_pixel()
         if self.ntp_ok:
             self._draw_clock()
         else:

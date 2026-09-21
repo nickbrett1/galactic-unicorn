@@ -89,7 +89,7 @@ import config
 from ambient import Ambient
 from buttons import Buttons
 from display import Display
-from main import ALL_SWITCHES, boot_banner, load_routines, power_on_dot, sync_ntp
+from main import ALL_SWITCHES, boot_banner, load_routines, loading_frame, sync_ntp
 from routine import COUNTDOWN, Engine
 from sound import Audio
 
@@ -158,9 +158,17 @@ if REAL_DARK:
     )
 
 if RUN_TOUR:
-    # -- 1. power-on dot, then the boot banner ------------------------------
-    banner("POWER-ON DOT  (the first thing on the panel at every boot)")
-    power_on_dot(display)
+    # -- 1. the loading frame, then the boot banner -------------------------
+    banner("POWER PIXEL + LOADING FRAME  (the first frame of every boot)")
+    log("one white LED in the top-left corner, and that is the whole point of")
+    log("it: boot.py lights it before its own look at the network, main.py")
+    log("keeps it lit under the banner, and ambient keeps it lit at rest - so")
+    log("the panel is never completely dark between power-on and the")
+    log("countdown. It is drawn here with the rest of the frame: the word")
+    log("HELLO, unlit, which is what the panel shows while the modules import")
+    log("behind it.")
+    loading_frame(display)
+    time.sleep_ms(1500)
 
     banner("BOOT / hello  (the phase-0 target, and what runs on every boot)")
     boot_banner(display, log)

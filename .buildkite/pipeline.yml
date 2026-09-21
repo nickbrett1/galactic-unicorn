@@ -107,6 +107,34 @@ steps:
         echo "$$VERSION" > .release-version
         echo "$$TAG" > .release-tag
       - |
+        # Nothing shipped -> nothing to release. This is the difference between
+        # a new version and a new version NUMBER.
+        #
+        # The pack holds only paths and file contents - the version string lives
+        # in manifest.json alone - so an unchanged pack hash means the firmware
+        # is byte-identical, and a board would download it, apply it and reboot
+        # for nothing. Releasing on every push to main means any CI, docs or
+        # devcontainer commit does exactly that. v0.1.18 was such a release (a
+        # merged PR touching .devcontainer and README): it cost a reboot and an
+        # evening of chasing "the board keeps rebooting and no version was
+        # pushed".
+        #
+        # Compared against the PREVIOUS RELEASE's manifest, not the previous
+        # commit: that is the pack a board actually has. If the fetch fails,
+        # release - an unreachable GitHub must not be able to block a release.
+        python3 scripts/build-firmware-pack.py "$$(cat .release-version)" /tmp/pack-check >/dev/null
+        NEW_SHA="$$(sha256sum /tmp/pack-check/firmware.pack | cut -d' ' -f1)"
+        PREV_SHA="$$(curl -fsSL https://github.com/nickbrett1/galactic-unicorn/releases/latest/download/manifest.json \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["pack"]["sha256"])' 2>/dev/null || true)"
+        if [ -n "$$PREV_SHA" ] && [ "$$NEW_SHA" = "$$PREV_SHA" ]; then
+          echo "firmware unchanged since the last release ($$NEW_SHA) - not tagging."
+          echo "boot.py and lib/updater.py are excluded from the pack on purpose,"
+          echo "so a change to only those reaches the board over USB, not via OTA."
+          exit 0
+        fi
+        echo "firmware changed: $${PREV_SHA:-<no previous release>} -> $$NEW_SHA"
+
+      - |
         # The tag is pushed with the release token explicitly, so this does not
         # depend on whatever credentials the agent happened to clone with. The
         # helper keeps the token out of the remote URL, where it would end up in

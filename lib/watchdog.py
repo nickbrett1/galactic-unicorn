@@ -45,6 +45,12 @@ unpack and apply - is sub-second on a 54 KB pack and sits inside the window.
 where a failure to feed must not itself take the display down. If the board
 has no WDT (a future `micropython` build without it), every call is a silent
 no-op and the board keeps its old behaviour - degraded, not broken.
+
+And where a loop cannot feed at all - a blocking `urequests.get` that owns the
+thread for as long as the network takes - widening the fuse is the answer
+rather than feeding it: `NETWORK_TIMEOUT_MS` is armed around the update check
+and TIMEOUT_MS restored after, in a `finally`. A rule that says "never block
+longer than the fuse" is only useful if the fuse can be the right length.
 """
 
 import machine
@@ -52,7 +58,34 @@ import machine
 # 8 s: far longer than any legitimate single blocking operation (the slowest is
 # a wifi poll at 200 ms or one 1 KB chunk off a socket), and short enough that
 # a wedged app is back on its feet before anyone notices the panes stopped.
+#
+# This is the fuse for the APP - the render loop, which feeds it every 20 ms.
+# It is NOT the right fuse for the update check (see NETWORK_TIMEOUT_MS).
 TIMEOUT_MS = 8000
+
+# The fuse for the network phase of an update check, and the reason the fuse is
+# a parameter at all rather than a constant.
+#
+# `check_for_update` leaves the render loop and spends its time inside
+# `urequests.get` - DNS, TCP and the TLS handshake - and updater._get says it
+# plainly: none of that can feed the fuse. config.py documents the same attempt
+# as blocking "up to ~30 s in a dead window". With an 8 s fuse, that is not a
+# slow check, it is a REBOOT.
+#
+# Measured on this board, 2026-09-21: every reset in wifi.log is reset_cause=3
+# (WDT_RESET) - the board was never crashing - and the two unattended ones
+# (13:14:24, 15:07:43) each land about one UPDATE_RETRY_MS after a boot, i.e.
+# exactly when the in-loop check ran. update.log beside them shows the network
+# stalling ("wifi attempt 1/3 got no IP" x8, "OSError('http 504',)").
+#
+# The cost of a reboot here is not a lost check: it unwinds whatever the panel
+# was doing, including a running countdown. So the check widens the fuse for
+# the network phase and puts it back afterwards (main.py, and the arm() calls
+# in lib/updater.py's own blocking loops). 30 s is the documented worst case
+# plus margin: long enough that a stalled check finishes or gives up, short
+# enough that a genuinely wedged board is still back on its feet in half a
+# minute.
+NETWORK_TIMEOUT_MS = 30000
 
 _wdt = None
 

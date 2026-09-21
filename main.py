@@ -179,6 +179,39 @@ def boot_banner(display, log):
     display.update()
 
 
+def _checked_under_network_fuse(check, config):
+    """Run the update check under a fuse sized for the network, not for the app.
+
+    The render loop feeds an 8 s fuse every 20 ms, but this call leaves the
+    loop: it spends its time inside `urequests.get` - DNS, TCP, the TLS
+    handshake - where nothing can feed the fuse (updater._get says so itself).
+    config.py documents the same attempt as blocking "up to ~30 s in a dead
+    window", so on a stalled network the 8 s fuse does not make the check slow,
+    it makes it a REBOOT: the board dies where it stands and comes back through
+    boot.py.
+
+    Measured on this board, 2026-09-21 - every reset in wifi.log is
+    reset_cause=3 (WDT_RESET), so the board was never crashing, and the two
+    unattended ones each landed about one UPDATE_RETRY_MS after a boot, exactly
+    when this check runs:
+
+        wifi: === boot fw=0.1.18 reset_cause=3 free=36416 ===     <- 15:07:43
+        wifi: === boot fw=0.1.17 reset_cause=3 free=36480 ===     <- 13:14:24
+
+    with update.log beside them showing the network stalling ("wifi attempt 1/3
+    got no IP" x8, "update failed: OSError('http 504',)").
+
+    So widen the fuse for the phase that cannot feed it, and put it back
+    afterwards. The restore is in a `finally`: a check that raises must not
+    leave the app running on the long fuse.
+    """
+    try:
+        watchdog.arm(getattr(watchdog, "NETWORK_TIMEOUT_MS", watchdog.TIMEOUT_MS))
+        check(config)
+    finally:
+        watchdog.arm(watchdog.TIMEOUT_MS)
+
+
 def main():
     from sys import print_exception
 
@@ -248,7 +281,11 @@ def main():
     # updater runs under it too and has to feed it (lib/watchdog.py, and the
     # feed calls in updater._join_wifi / updater._download).
     if watchdog.arm():
-        log(f"wedge protection: watchdog armed at {watchdog.TIMEOUT_MS} ms")
+        log(
+            f"wedge protection: watchdog armed at {watchdog.TIMEOUT_MS} ms"
+            f" ({getattr(watchdog, 'NETWORK_TIMEOUT_MS', watchdog.TIMEOUT_MS)} ms"
+            " during update checks, which cannot feed it)"
+        )
     else:
         log("wedge protection: no watchdog on this build (degraded, not broken)")
 
@@ -289,8 +326,16 @@ def main():
         # on purpose - this can block the display for ~30 s in a dead window,
         # and a release must not have its soak interrupted by its own update
         # check. check_for_update resets the board if it applies anything.
-        if time.ticks_diff(now, update_checked_at) >= getattr(
-            config, "UPDATE_RETRY_MS", 15 * 60 * 1000
+        if (
+            time.ticks_diff(now, update_checked_at)
+            >= getattr(config, "UPDATE_RETRY_MS", 15 * 60 * 1000)
+            # Never while a routine is live. check_for_update can block for
+            # ~30 s, and with an 8 s fuse a stalled check is a reboot (see
+            # _checked_under_network_fuse) - and a reboot unwinds the countdown,
+            # so checking at the wrong moment costs a child their timer. This is
+            # a deferral, not a skip: update_checked_at is left alone, so the
+            # check runs on the first idle frame instead.
+            and engine.routine is None
         ):
             update_checked_at = time.ticks_ms()
             # lib/updater.py is EXCLUDED from the pack, so a release can reach
@@ -299,7 +344,7 @@ def main():
             # feature is optional; the display is not.
             check = getattr(updater, "check_for_update", None)
             if check is not None:
-                check(config)
+                _checked_under_network_fuse(check, config)
         try:
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.

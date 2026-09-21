@@ -77,20 +77,18 @@ def sync_ntp(log):
 
         wlan = network.WLAN(network.STA_IF)
         wlan.active(True)
-        if not wlan.isconnected():
-            # Only while we are still down. boot.py has already applied the
-            # reserved address (the updater's own join does it, before its
-            # connect), so a connection that is up means the address AND the
-            # resolver are configured already - and re-applying them here would
-            # only be more ways to get it wrong. Same reserved address as the
-            # updater uses, so NTP does not pay for a DHCP exchange either.
-            # Imported lazily: this module is optional.
-            try:
-                import updater
+        # Same reserved address as the updater uses, so NTP does not pay for a
+        # DHCP exchange either. Applied whether or not the radio says it is
+        # already connected: after a soft reset it says it is, while the
+        # resolver is empty, and skipping it here is what made NTP fail every
+        # attempt with (-2). Imported lazily: this module is optional.
+        try:
+            import updater
 
-                updater.apply_static_ip(wlan, config)
-            except Exception:  # noqa: BLE001, S110 - best effort, DHCP still works
-                pass
+            updater.apply_static_ip(wlan, config)
+        except Exception:  # noqa: BLE001, S110 - best effort, DHCP still works
+            pass
+        if not wlan.isconnected():
             log("ntp: joining wifi")
             wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
             started = time.ticks_ms()

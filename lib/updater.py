@@ -225,11 +225,21 @@ def _join_wifi(config, attempts=WIFI_ATTEMPTS, attempt_ms=WIFI_ATTEMPT_MS):
 
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
+    # Applied even when the radio already reports a connection, and that order
+    # is load-bearing. After a SOFT reset the radio chip keeps the association,
+    # so isconnected() is true from the first line of boot.py - while lwip on
+    # the RP2040 starts again with no address and no resolver. A check that
+    # short-circuits on isconnected() therefore runs with name resolution
+    # broken, which is exactly what the log showed: a boot with no join in it
+    # at all, and "update failed, keeping current firmware: OSError(-2,)".
+    # Re-applying while connected is safe (measured: still connected, lookups
+    # went from failing to 66 ms, ntptime to 43 ms), and it is the only thing
+    # that puts the resolver back on that boot.
+    apply_static_ip(wlan, config)
     if wlan.isconnected():
         return True
     # Before the first connect(): a reserved address means there is no DHCP
     # exchange to hang on (see config.STATIC_IP).
-    apply_static_ip(wlan, config)
     # Association was never the problem: the board reaches "associated, no IP"
     # (status 2) within a second or two and then sits there while DHCP never
     # completes - for the WHOLE attempt. Measured on this board: boot.py's first

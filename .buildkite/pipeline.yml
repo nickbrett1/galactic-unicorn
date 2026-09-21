@@ -27,6 +27,23 @@ steps:
     commands:
       - python -m pip install --no-cache-dir -e ".[dev]"
       - ruff check .
+      # The host-only regression tests the step's own label always promised.
+      # They run on CPython against shims (a fake WLAN, a controllable
+      # ticks_ms, a fake synth channel), so they need no board and no hardware
+      # - which is exactly why they belong here and not in a deploy. The glob
+      # is the point: a new tests/test_*.py is picked up by existing files, not
+      # by someone remembering to add it. No dependencies, so nothing to
+      # install beyond the dev extra already done above.
+      - |
+        for t in tests/test_*.py; do
+          echo "--- $$t"
+          python3 "$$t"
+        done
+      # The fanfare renderer imports lib/sound.py and config.py, builds an
+      # envelope and writes a wav. Running it proves the render path is alive
+      # (and that the modules still import outside MicroPython) with no board
+      # on the wire. The wav is throwaway - audition tooling, not an artifact.
+      - python3 scripts/render-fanfare.py /tmp/fanfare.wav
 
   - label: ":bookmark: Release"
     key: release

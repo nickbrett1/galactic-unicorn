@@ -253,6 +253,28 @@ def case_lamp_is_drawn_after_the_clear():
     return body()
 
 
+def case_dark_room_keeps_the_lamp():
+    """A dark room is when the lamp matters most - so it must survive it.
+
+    This is the case the panel actually spends its evenings in (measured on the
+    board: light()=17 against LIGHT_DARK=40). The clock and the breathing pixel
+    go, because furniture should not light a bedroom; the lamp stays, because
+    otherwise a powered board and a dead one look identical in the dark.
+    """
+
+    def body():
+        d, a = fresh(ntp_ok=True)
+        a.draw_dark()
+        g = d.graphics
+        return report(
+            "a dark room keeps the lamp and drops everything else",
+            g.pixels == [(0, 0, WHITE)] and g.texts == [],
+            f"pixels={g.pixels} texts={g.texts} brightness={d.gu.brightness}",
+        )
+
+    return body()
+
+
 def main():
     results = [
         case_lamp_is_in_the_corner(),
@@ -260,6 +282,7 @@ def main():
         case_lamp_lit_without_clock(),
         case_lamp_survives_every_frame(),
         case_lamp_is_drawn_after_the_clear(),
+        case_dark_room_keeps_the_lamp(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} passed")

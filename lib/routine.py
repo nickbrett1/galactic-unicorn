@@ -276,9 +276,12 @@ class Engine:
         events = self.buttons.poll(now)
         self._handle_events(events, now)
 
-        # Dark room -> everything goes dark. A press wakes it.
+        # Dark room -> the clock and the breathing pixel go dark (they are
+        # furniture, and furniture should not light a bedroom at night), but
+        # the power lamp does NOT: see ambient.draw_dark. A press still wakes
+        # the panel, exactly as before.
         if self.display.room_is_dark() and self.state == AMBIENT:
-            self._render_off()
+            self.ambient.draw_dark()
             return
         if self.state == OFF:
             if events:

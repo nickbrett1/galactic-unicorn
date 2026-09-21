@@ -81,3 +81,25 @@ class Ambient:
         else:
             self._draw_status_pixel(phase_ms)
         d.update()
+
+    def draw_dark(self):
+        """A dark room: the lamp, and nothing else.
+
+        The clock and the breathing pixel are furniture, and furniture should
+        not be a light source in a bedroom at night - so they go, as they always
+        have. The lamp stays. It is the one pixel that answers "is this thing
+        on?", and a dark room is precisely when nothing else on the panel can
+        answer it: the panel is black, the router is in another room, and from
+        the sofa a powered board and a dead one look identical.
+
+        One dim LED is also what an appliance looks like when it is off - this
+        is a standby light, not a screen. Drawn at AMBIENT brightness (the
+        dimmest this app ever draws) rather than whatever the last state left
+        behind, so a routine that ended a moment ago cannot leave the lamp
+        glaring in the dark.
+        """
+        d = self.display
+        d.set_brightness(self.config.BRIGHTNESS_AMBIENT)
+        d.clear()
+        d.power_pixel()
+        d.update()

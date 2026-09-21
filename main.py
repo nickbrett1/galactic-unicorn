@@ -120,10 +120,11 @@ def sync_ntp(log):
 def firmware_version():
     """The release the updater applied, read from version.txt at every boot.
 
-    The boot banner shows this, which makes the banner self-evidencing: the
-    number on the panel is the release boot.py just pulled over the air. A USB
-    deploy has no version.txt (only the updater writes it, last, on success),
-    which reads "dev" - correctly, because nothing has been released onto it.
+    The boot log line and wifihealth's per-boot header both carry this, so the
+    release the board is running is still self-evidencing - it just is not on
+    the panel any more (see boot_banner). A USB deploy has no version.txt (only
+    the updater writes it, last, on success), which reads "dev" - correctly,
+    because nothing has been released onto it.
     """
     try:
         with open("version.txt") as fh:

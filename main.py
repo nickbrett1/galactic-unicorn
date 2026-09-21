@@ -77,6 +77,14 @@ def sync_ntp(log):
 
         wlan = network.WLAN(network.STA_IF)
         wlan.active(True)
+        # Same reserved address as the updater uses, so NTP does not pay for a
+        # DHCP exchange either. Imported lazily: this module is optional.
+        try:
+            import updater
+
+            updater.apply_static_ip(wlan, config)
+        except Exception:  # noqa: BLE001, S110 - best effort, DHCP still works
+            pass
         if not wlan.isconnected():
             log("ntp: joining wifi")
             wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)

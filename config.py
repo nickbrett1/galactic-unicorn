@@ -130,3 +130,23 @@ try:
 except ImportError:
     WIFI_SSID = None
     WIFI_PASSWORD = None
+
+# Static addressing, when the network has reserved one for this board.
+#
+# A DHCP reservation is an instruction to the ROUTER ("give this MAC .63"), not
+# to the board: the client still runs a fresh DHCP exchange on every boot,
+# because MicroPython keeps no lease across a reset. And the exchange is exactly
+# what hangs here - every log we have reads status=2 (associated, no IP), i.e.
+# association succeeds in a second or two and DHCP never answers. Setting the
+# address up front takes DHCP out of the boot path entirely: the board is online
+# the moment it associates.
+#
+# Safe ONLY because of that same reservation - the router will not hand this
+# address to anything else. All None (the default) means "use DHCP as before".
+try:
+    from config_secrets import STATIC_DNS, STATIC_GATEWAY, STATIC_IP, STATIC_MASK
+except ImportError:
+    STATIC_IP = None
+    STATIC_MASK = None
+    STATIC_GATEWAY = None
+    STATIC_DNS = None

@@ -168,6 +168,31 @@ def _wait_for_ip(wlan, budget_ms):
     return True
 
 
+def apply_static_ip(wlan, config):
+    """Point the radio at a fixed address, if the network has reserved one.
+
+    Does nothing without a complete STATIC_* set, so the DHCP path is untouched
+    for anyone who has not configured it. Must be called with the interface
+    active and BEFORE connect(): with an address already set, connect() only has
+    to associate, which is the part that has always worked here.
+    """
+    ip = getattr(config, "STATIC_IP", None)
+    if not ip:
+        return False
+    mask = getattr(config, "STATIC_MASK", None)
+    gateway = getattr(config, "STATIC_GATEWAY", None)
+    dns = getattr(config, "STATIC_DNS", None)
+    if not (mask and gateway and dns):
+        _log("static ip incomplete, using dhcp")
+        return False
+    try:
+        wlan.ifconfig((ip, mask, gateway, dns))
+    except Exception as exc:  # noqa: BLE001 - DHCP is always the fallback
+        _log("could not set static ip, using dhcp", exc)
+        return False
+    return True
+
+
 def _join_wifi(config, attempts=WIFI_ATTEMPTS, attempt_ms=WIFI_ATTEMPT_MS):
     if not config.WIFI_SSID:
         return False
@@ -177,6 +202,9 @@ def _join_wifi(config, attempts=WIFI_ATTEMPTS, attempt_ms=WIFI_ATTEMPT_MS):
     wlan.active(True)
     if wlan.isconnected():
         return True
+    # Before the first connect(): a reserved address means there is no DHCP
+    # exchange to hang on (see config.STATIC_IP).
+    apply_static_ip(wlan, config)
     # Association was never the problem: the board reaches "associated, no IP"
     # (status 2) within a second or two and then sits there while DHCP never
     # completes - for the WHOLE attempt. Measured on this board: boot.py's first

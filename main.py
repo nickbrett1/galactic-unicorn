@@ -4,8 +4,9 @@ MicroPython runs this file on boot. Imports resolve from the filesystem root
 and from lib/, so reusable modules live in lib/ and are imported by their
 module name.
 
-Boot order: BOOT self-test (banner "v<version>" - the release applied by the
-updater) -> best-effort NTP -> the routine loop. Nothing after the self-test
+Boot order: BOOT self-test (a colourful HELLO banner; the applied release is
+logged and written to the wifihealth header) -> best-effort NTP -> the routine
+loop. Nothing after the self-test
 blocks on the network: the countdown is locally timed and runs with WiFi
 switched off.
 """
@@ -14,6 +15,7 @@ import gc
 import json
 import time
 
+import bigfont
 import config
 import updater
 import watchdog
@@ -161,20 +163,56 @@ def mark_boot_ok(log):
         log(f"could not record boot-ok ({exc})")
 
 
+# The banner word, one hue per letter. Bright and distinct - this is the
+# friendliest thing the panel ever draws, and it is the first thing you see.
+HELLO_WORD = "HELLO"
+HELLO_COLORS = (
+    (255, 32, 0),  # red
+    (255, 140, 0),  # amber
+    (255, 240, 0),  # yellow
+    (0, 255, 48),  # green
+    (0, 170, 255),  # blue
+)
+# Letters that have not lit yet: visible enough to read the word as arriving,
+# dark enough that the lighting-up is worth watching.
+HELLO_DIM = (20, 22, 30)
+HELLO_STEP_MS = 110  # per-letter chase-in
+HELLO_HOLD_MS = 1600  # the finished word, still and readable
+
+
+def _draw_hello(display, x, lit):
+    """Draw HELLO at (x, 0) with the first `lit` letters in colour.
+
+    Drawn a glyph at a time (bigfont draws one colour per call), so each letter
+    can carry its own hue. bigfont.draw_text returns the x past the glyph it
+    drew, so the next letter starts GAP px further on.
+    """
+    display.clear()
+    for i, ch in enumerate(HELLO_WORD):
+        rgb = HELLO_COLORS[i % len(HELLO_COLORS)] if i < lit else HELLO_DIM
+        x = bigfont.draw_text(display, x, 0, ch, rgb=rgb) + bigfont.GAP
+    display.update()
+
+
 def boot_banner(display, log):
-    """BOOT / self-test. Also the phase-0 'hello' target."""
+    """Say hello: HELLO in big blocky colour, then hold it. Silent.
+
+    Fills the panel height (bigfont's 11 px glyphs), so it reads from across
+    the room. The letters arrive one at a time and then sit still - the earlier
+    banner scrolled the firmware version past at 25 ms a frame, which was too
+    fast to read and (at 8 px upscaled) too small to read anyway. The version
+    still goes to the log, and wifihealth writes it into its per-boot header,
+    so nothing is lost by keeping it off the panel.
+    """
     version = firmware_version()
     log(f"BOOT {config.BOARD} / {config.CHIP} fw={version}")
     display.set_brightness(config.BRIGHTNESS_COUNTDOWN)
-    msg = "v" + version
-    width = display.text_width(msg, scale=1)
-    for x in range(display.width, -width, -1):
-        display.clear()
-        display.text(msg, x, (display.height - 8) // 2, rgb=(0, 150, 200), scale=1)
-        # A payload bar under it proves the whole width renders.
-        display.rect(0, display.height - 2, display.width, 1, (0, 60, 90))
-        display.update()
-        time.sleep_ms(25)
+    x0 = max(0, (display.width - bigfont.text_width(HELLO_WORD)) // 2)
+    for lit in range(1, len(HELLO_WORD) + 1):
+        _draw_hello(display, x0, lit)
+        time.sleep_ms(HELLO_STEP_MS)
+    _draw_hello(display, x0, len(HELLO_WORD))
+    time.sleep_ms(HELLO_HOLD_MS)
     display.clear()
     display.update()
 

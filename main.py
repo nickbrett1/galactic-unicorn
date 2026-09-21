@@ -4,11 +4,11 @@ MicroPython runs this file on boot. Imports resolve from the filesystem root
 and from lib/, so reusable modules live in lib/ and are imported by their
 module name.
 
-Boot order: BOOT self-test (a colourful HELLO banner; the applied release is
-logged and written to the wifihealth header) -> best-effort NTP -> the routine
-loop. Nothing after the self-test
-blocks on the network: the countdown is locally timed and runs with WiFi
-switched off.
+Boot order: a white power-on dot the moment the panel exists -> BOOT self-test
+(a colourful HELLO banner; the applied release is logged and written to the
+wifihealth header) -> best-effort NTP -> the routine loop. Nothing after the
+self-test blocks on the network: the countdown is locally timed and runs with
+WiFi switched off.
 """
 
 import gc
@@ -19,8 +19,6 @@ import bigfont
 import config
 import updater
 import watchdog
-from ambient import Ambient
-from buttons import Buttons
 from display import (
     SWITCH_BRIGHTNESS_DOWN,
     SWITCH_BRIGHTNESS_UP,
@@ -28,18 +26,14 @@ from display import (
     SWITCH_VOLUME_DOWN,
     SWITCH_VOLUME_UP,
     SWITCHES,
+    WHITE,
     Display,
 )
-from routine import Engine
-from sound import Audio
 
-# Instrumentation, not machinery: main.py can be hand-deployed over USB without
-# it (lib/updater.py is deployed that way), so a missing module must degrade to
-# "no trace" rather than break the boot.
-try:
-    import wifihealth
-except ImportError:  # pragma: no cover - only on a hand-deployed tree
-    wifihealth = None
+# Everything else main.py needs is imported INSIDE main(), behind the power-on
+# dot - see the note there for what that is worth, and the measurement behind
+# it. `display` cannot move with them: ALL_SWITCHES is built here, from the
+# switch constants, and scripts/showcase.py imports those names from main.
 
 ROUTINES_PATH = "routines.json"
 LOOP_MS = 20
@@ -195,6 +189,49 @@ def _draw_hello(display, x, lit):
     display.update()
 
 
+# The power-on indicator: a small solid block in the middle of the panel, lit
+# the instant there is a panel to light (see power_on_dot).
+POWER_DOT_PX = 3
+POWER_DOT_ON_MS = 110
+POWER_DOT_OFF_MS = 80
+
+
+def power_on_dot(display):
+    """Light the panel as soon as there is a panel to light. Silent.
+
+    The banner cannot be the first sign of life, and neither can anything in
+    boot.py. Before boot_banner can draw a letter, the board still has to
+    import its modules, build the display and read routines.json - and a dark
+    panel is indistinguishable from a board that never started, which is
+    exactly how a power blip and a brick look from the sofa.
+
+    So this is the earliest point that is safe to draw from: main.py is about
+    to run whatever else happens, whereas boot.py is the file that REPAIRS
+    everything else (see its docstring) and must not gain code that can fail
+    before the update phase. What stays dark is therefore boot.py's own look at
+    the network, not this.
+
+    One small white block, blinked once so it reads as "powered on" rather than
+    as a stuck pixel, then left lit while the rest of the boot loads underneath
+    it. boot_banner's first frame clears it, so it hands over rather than
+    disappears.
+    """
+    display.set_brightness(config.BRIGHTNESS_COUNTDOWN)
+    x = (display.width - POWER_DOT_PX) // 2
+    y = (display.height - POWER_DOT_PX) // 2
+
+    display.clear()
+    display.rect(x, y, POWER_DOT_PX, POWER_DOT_PX, rgb=WHITE)
+    display.update()
+    time.sleep_ms(POWER_DOT_ON_MS)
+    display.clear()
+    display.update()
+    time.sleep_ms(POWER_DOT_OFF_MS)
+    display.clear()
+    display.rect(x, y, POWER_DOT_PX, POWER_DOT_PX, rgb=WHITE)
+    display.update()
+
+
 def boot_banner(display, log):
     """Say hello: HELLO in big blocky colour, then hold it. Silent.
 
@@ -273,6 +310,32 @@ def main():
 
     try:
         display = Display(config)
+        power_on_dot(display)
+        # The panel is lit the moment it exists, and everything expensive is
+        # loaded BEHIND that light rather than in front of it. These are the
+        # modules deferred out of the top of the file, measured cold on the
+        # board with each module dropped from sys.modules first:
+        #
+        #     routine 322 ms   buttons 84 ms   ambient 80 ms
+        #     sound    73 ms   wifihealth 135 ms
+        #
+        # ~700 ms of a boot that used to be dark, which is most of what "it
+        # takes a second or two" actually was after boot.py's own look at the
+        # network. A failure to import is still loud: it lands in the handler
+        # below, which is the documented behaviour for a broken deploy.
+        from ambient import Ambient
+        from buttons import Buttons
+        from routine import Engine
+        from sound import Audio
+
+        # Instrumentation, not machinery: main.py can be hand-deployed over USB
+        # without it (lib/updater.py is deployed that way), so a missing module
+        # must degrade to "no trace" rather than break the boot.
+        try:
+            import wifihealth
+        except ImportError:  # pragma: no cover - only on a hand-deployed tree
+            wifihealth = None
+
         routines, button_map = load_routines()
         log(f"loaded {len(routines)} routines, buttons={button_map}")
     # Config errors are worth crashing on: a display that boots to a blank

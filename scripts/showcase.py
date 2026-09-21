@@ -89,7 +89,7 @@ import config
 from ambient import Ambient
 from buttons import Buttons
 from display import Display
-from main import ALL_SWITCHES, boot_banner, load_routines, sync_ntp
+from main import ALL_SWITCHES, boot_banner, load_routines, power_on_dot, sync_ntp
 from routine import COUNTDOWN, Engine
 from sound import Audio
 
@@ -158,7 +158,10 @@ if REAL_DARK:
     )
 
 if RUN_TOUR:
-    # -- 1. boot banner -----------------------------------------------------
+    # -- 1. power-on dot, then the boot banner ------------------------------
+    banner("POWER-ON DOT  (the first thing on the panel at every boot)")
+    power_on_dot(display)
+
     banner("BOOT / hello  (the phase-0 target, and what runs on every boot)")
     boot_banner(display, log)
 

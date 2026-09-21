@@ -123,3 +123,16 @@ what ships.
 - **It does not choose the version.** Versions are patch bumps from the last
   tag, so there are no major/minor releases. Tag a version by hand once, and CI
   will continue from there.
+- **It does not release a no-op.** The release step builds the pack and
+  compares its sha256 with the previous release's `manifest.json`; if they
+  match, it exits without tagging. The pack holds only paths and file
+  contents - the version string lives in `manifest.json` alone - so an
+  identical hash means the firmware is byte-identical, and a board would
+  download it, apply it and reboot for nothing. v0.1.18 was such a release (a
+  merged PR touching `.devcontainer` and `README.md`): a new version number,
+  no new firmware, and a reboot. If the manifest fetch fails, the step
+  releases anyway - an unreachable GitHub must not block a release.
+
+  Consequence worth knowing: `boot.py` and `lib/updater.py` are excluded from
+  the pack on purpose, so a change to only those files reaches the board over
+  USB (`scripts/deploy.sh`), not via OTA, and produces no tag.

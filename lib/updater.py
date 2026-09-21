@@ -175,6 +175,20 @@ def apply_static_ip(wlan, config):
     for anyone who has not configured it. Must be called with the interface
     active and BEFORE connect(): with an address already set, connect() only has
     to associate, which is the part that has always worked here.
+
+    Uses ipconfig(), NOT the older ifconfig((ip, mask, gw, dns)). On the rp2
+    port that 4-tuple leaves the board unable to resolve ANY name: every
+    socket.getaddrinfo raises OSError(-2), which cost the NTP sync all three
+    attempts and made the update check fail on every single boot. The network
+    was never at fault - raw DNS over UDP to the same server answered in
+    8-160 ms throughout - so it is the resolver's configuration, and it is a
+    known MicroPython regression (micropython#15695). The newer API separates
+    the two: wlan.ipconfig(addr4=..., gw4=...) sets the address, and
+    network.ipconfig(dns=...) sets the resolver for the whole stack.
+
+    Measured on this board, same address and same server, one after the other:
+    with ifconfig every lookup failed, with ipconfig pool.ntp.org resolved in
+    144 ms and ntptime.settime() then took 80 ms.
     """
     ip = getattr(config, "STATIC_IP", None)
     if not ip:
@@ -185,6 +199,17 @@ def apply_static_ip(wlan, config):
     if not (mask and gateway and dns):
         _log("static ip incomplete, using dhcp")
         return False
+    try:
+        # Older firmware has no network.ipconfig, and there the 4-tuple
+        # ifconfig is both the only way and a working one - the regression
+        # arrived in 1.24, and network.ipconfig with it.
+        import network
+
+        wlan.ipconfig(addr4=(ip, mask), gw4=gateway)
+        network.ipconfig(dns=dns)
+        return True
+    except Exception as exc:  # noqa: BLE001 - fall back to the older form
+        _log("ipconfig could not set the static address", exc)
     try:
         wlan.ifconfig((ip, mask, gateway, dns))
     except Exception as exc:  # noqa: BLE001 - DHCP is always the fallback

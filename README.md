@@ -9,7 +9,7 @@ This project includes the following capabilities:
 - **Editor Configuration**: Shared VS Code extensions and workspace settings for consistent tooling across the team.
 - **Shell & Terminal**: Zsh shell with the Powerlevel10k prompt and productivity plugins.
 - **Doppler Secrets Management**: Integrates Doppler for secure secrets management. Enables the various MCP servers that rely on privileged tokens to access their services (e.g. CircleCI, GitHub, SonarQube).
-- **AI Coding Agents**: Sets up the AI coding agents in the devcontainer: goose (config, MCP servers and spec-first recipes) plus the Cursor and Antigravity CLIs.
+- **AI Coding Agents**: Sets up the AI coding agents in the devcontainer: goose (config, MCP servers and spec-first recipes) plus the Antigravity CLI.
 - **Container Agent**: Every generated devcontainer brings up and registers its own a2a-goose agent (`<repo>-dev`), reached over the tailnet by the LiteLLM proxy; reuses the a2a-goose GitHub release channel, so the container has the same self-update path as a host.
 - **Docker**: Adds Docker support for containerised builds and tooling.
 - **Python DevContainer**: Sets up a VS Code DevContainer with Python environment.

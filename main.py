@@ -255,37 +255,31 @@ def boot_banner(display, log):
     # to the resting state.
 
 
-def _checked_under_network_fuse(check, config):
-    """Run the update check under a fuse sized for the network, not for the app.
+def _run_update_check(check, config):
+    """Run the update check. It fits under the app fuse now, so nothing is armed.
 
-    The render loop feeds an 8 s fuse every 20 ms, but this call leaves the
-    loop: it spends its time inside `urequests.get` - DNS, TCP, the TLS
-    handshake - where nothing can feed the fuse (updater._get says so itself).
-    config.py documents the same attempt as blocking "up to ~30 s in a dead
-    window", so on a stalled network the 8 s fuse does not make the check slow,
-    it makes it a REBOOT: the board dies where it stands and comes back through
-    boot.py.
+    This used to be `_checked_under_network_fuse`: it widened the watchdog for
+    the network phase (`NETWORK_TIMEOUT_MS = 30000`), because the check left the
+    render loop and spent its time inside a blocking `urequests.get` that cannot
+    feed the fuse - so on a stalled network the 8 s fuse did not make the check
+    slow, it made it a REBOOT. The reset log agreed: every reset was
+    reset_cause=3 (WDT_RESET), and the unattended ones each landed one
+    UPDATE_RETRY_MS after a boot, exactly when this check runs.
 
-    Measured on this board, 2026-09-21 - every reset in wifi.log is
-    reset_cause=3 (WDT_RESET), so the board was never crashing, and the two
-    unattended ones each landed about one UPDATE_RETRY_MS after a boot, exactly
-    when this check runs:
+    Measured on this board, 2026-09-26: the widening does not work. An explicit
+    `machine.WDT(timeout=30000)` fires in under 11 s, not at 30 s - so the check
+    ran under a fuse the code only believed was long. Worse than useless: it hid
+    the real budget.
 
-        wifi: === boot fw=0.1.18 reset_cause=3 free=36416 ===     <- 15:07:43
-        wifi: === boot fw=0.1.17 reset_cause=3 free=36480 ===     <- 13:14:24
-
-    with update.log beside them showing the network stalling ("wifi attempt 1/3
-    got no IP" x8, "update failed: OSError('http 504',)").
-
-    So widen the fuse for the phase that cannot feed it, and put it back
-    afterwards. The restore is in a `finally`: a check that raises must not
-    leave the app running on the long fuse.
+    So the check is made to fit instead, and there is nothing to arm or restore:
+    the manifest and the pack come over plain HTTP from the LAN service
+    (config.UPDATE_MANIFEST_URL), a literal IP, and every socket operation has
+    an explicit timeout (config.UPDATE_TIMEOUT_S) so the longest stretch that
+    cannot feed the fuse is one 3 s read - comfortably inside the ~8 s fuse.
+    The deferral gate that keeps the check out of a running countdown is
+    unchanged, and it is still the thing that protects a child's timer.
     """
-    try:
-        watchdog.arm(getattr(watchdog, "NETWORK_TIMEOUT_MS", watchdog.TIMEOUT_MS))
-        check(config)
-    finally:
-        watchdog.arm(watchdog.TIMEOUT_MS)
+    check(config)
 
 
 def main():
@@ -396,11 +390,10 @@ def main():
     # updater runs under it too and has to feed it (lib/watchdog.py, and the
     # feed calls in updater._join_wifi / updater._download).
     if watchdog.arm():
-        log(
-            f"wedge protection: watchdog armed at {watchdog.TIMEOUT_MS} ms"
-            f" ({getattr(watchdog, 'NETWORK_TIMEOUT_MS', watchdog.TIMEOUT_MS)} ms"
-            " during update checks, which cannot feed it)"
-        )
+        # One number now, not two: the update check runs on the same fuse as
+        # everything else, because it is bounded to fit under it (see
+        # _run_update_check). WDT_MAX_MS is the ceiling arm() will honour.
+        log(f"wedge protection: watchdog armed at {watchdog.TIMEOUT_MS} ms")
     else:
         log("wedge protection: no watchdog on this build (degraded, not broken)")
 
@@ -435,27 +428,27 @@ def main():
         if not boot_ok_written and time.ticks_diff(now, loop_started) >= BOOT_OK_SOAK_MS:
             boot_ok_written = True
             mark_boot_ok(log)
-        # Retry the update from here, not just from boot.py: the network fails
-        # in windows of minutes, so an update that missed its chance at boot
-        # should still land when the network clears. Placed AFTER mark_boot_ok
-        # on purpose - this can block the display for ~30 s in a dead window,
-        # and a release must not have its soak interrupted by its own update
-        # check. check_for_update resets the board if it applies anything.
+        # Retry the update from here, not just from boot.py: DHCP on this
+        # network fails in windows of minutes, so an update that missed its
+        # chance at boot should still land when the network clears. Placed AFTER
+        # mark_boot_ok on purpose - the join inside it can block the display for
+        # up to a wifi attempt, and a release must not have its soak interrupted
+        # by its own update check. check_for_update resets the board if it
+        # applies anything.
         if (
             time.ticks_diff(now, update_checked_at)
             >= getattr(config, "UPDATE_RETRY_MS", 15 * 60 * 1000)
-            # Never while a routine is live. check_for_update can block for
-            # ~30 s, and with an 8 s fuse a stalled check is a reboot (see
-            # _checked_under_network_fuse) - and a reboot unwinds the countdown,
-            # so checking at the wrong moment costs a child their timer. This is
-            # a deferral, not a skip: update_checked_at is left alone, so the
-            # check runs on the first idle frame instead.
+            # Never while a routine is live: a join, or a slow fetch, still
+            # blocks this thread for a moment, and a reboot here would unwind
+            # the countdown and cost a child their timer. Since 2026-09-26 the
+            # check no longer needs a longer fuse (it is bounded to fit under
+            # the 8 s one - _run_update_check), so this gate is now a courtesy
+            # rather than a defence against a guaranteed reset. It stays: a
+            # stalled join is still a stalled panel.
             and engine.routine is None
             # ... and never while the remote poller says a COUNTDOWN/HANDOFF is
-            # live (device-protocols.md section 8.3): the check can block for
-            # ~30 s in a dead window, and a reboot there would unwind the
-            # countdown. The remote defers it too, so the rule is stated once
-            # on each side of the seam.
+            # live (device-protocols.md section 8.3): the remote defers it too,
+            # so the rule is stated once on each side of the seam.
             and (remote is None or not remote.busy())
         ):
             update_checked_at = time.ticks_ms()
@@ -465,7 +458,7 @@ def main():
             # feature is optional; the display is not.
             check = getattr(updater, "check_for_update", None)
             if check is not None:
-                _checked_under_network_fuse(check, config)
+                _run_update_check(check, config)
         try:
             # The remote, if present, gets one bounded poll at most per
             # cadence. It emits the SAME button event the panel would, so the

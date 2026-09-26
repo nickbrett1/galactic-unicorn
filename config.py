@@ -122,6 +122,57 @@ UPDATE_MANIFEST_URL = (
 UPDATE_RETRY_MS = 15 * 60 * 1000
 
 # ---------------------------------------------------------------------------
+# Remote triggering (phase 2)
+# ---------------------------------------------------------------------------
+
+# Poll the LAN service for desired state. The poll is plain HTTP on the LAN
+# (the service terminates no TLS on 3009), so it costs a query-param GET and a
+# few hundred bytes back. Turning this off leaves the panel exactly as it was:
+# buttons only, no network in the loop.
+REMOTE_ENABLED = True
+
+# The service's LAN address and port. A literal IP, so the poll does no DNS -
+# the board is already on the same subnet, and a name would only add a lookup
+# that can fail. Firewalled to the LAN; it is never reachable from the internet.
+REMOTE_SERVICE_URL = "http://192.168.1.2:3009"
+
+# The board-side clamp on the server's `next_poll_ms` (device-protocols.md
+# section 6). The server sets the cadence; these are the floors and ceilings
+# it is clamped to on THIS side (memo sections 6.3.5, 11.10). The server's own
+# clamp is NEXT_POLL_MIN_MS/MAX_MS = 1000/10000 (O5), so these match it.
+REMOTE_POLL_MIN_MS = 1000
+REMOTE_POLL_MAX_MS = 10000
+
+# The whole poll gets a tight budget (device-protocols.md section 8.1): the
+# socket timeout bounds DNS+connect+read, so a dead service cannot stall a
+# frame of the countdown by more than this.
+REMOTE_TIMEOUT_S = 1.5
+
+# Hard byte cap on the response body (device-protocols.md sections 1, 8.4). The
+# body is a few hundred bytes; the cap is what stops a misbehaving or wrong
+# server from handing the board a body it cannot hold. 1 KB is comfortably
+# above the contract's "a few hundred bytes".
+REMOTE_READ_CAP = 1024
+
+# One join ATTEMPT for the remote path, with the updater's single-attempt
+# budget. A join only ever happens while the panel is IDLE (never in COUNTDOWN
+# or HANDOFF - see lib/remote.py), so the worst case is a bounded stall on an
+# idle screen, not on a running timer.
+REMOTE_WIFI_ATTEMPTS = 1
+REMOTE_WIFI_ATTEMPT_MS = 10000
+
+# The board's applied_gen high-water mark, persisted to flash (a few writes a
+# day - wear is a non-issue; device-protocols.md section 3). It must survive a
+# reboot in both directions so neither side can wedge the other (memo section
+# 11.6). Board-local: not in the update pack.
+REMOTE_APPLIED_GEN_FILE = "applied_gen.txt"
+
+# Where a poll failure is written down. The transient REPL line is not enough:
+# the failure mode this exists for - a heap failure that looks like a link
+# failure - has to be readable after the session (memo section 11.15).
+REMOTE_LOG_FILE = "remote.log"
+
+# ---------------------------------------------------------------------------
 # Secrets (gitignored; absent by default)
 # ---------------------------------------------------------------------------
 
@@ -150,3 +201,13 @@ except ImportError:
     STATIC_MASK = None
     STATIC_GATEWAY = None
     STATIC_DNS = None
+
+# The device token the service expects on every poll (device-protocols.md
+# section 1). It is a shared LAN-only secret, defence in depth only (memo
+# section 10) - never a real boundary, since anyone on the LAN can press the
+# physical button - but it still must never be in the committed tree or in the
+# update pack. Absent -> the poll is disabled rather than sent unauthenticated.
+try:
+    from config_secrets import REMOTE_DEVICE_TOKEN
+except ImportError:
+    REMOTE_DEVICE_TOKEN = None

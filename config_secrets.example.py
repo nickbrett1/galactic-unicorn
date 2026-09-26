@@ -20,3 +20,11 @@ STATIC_IP = "192.168.1.63"
 STATIC_MASK = "255.255.255.0"
 STATIC_GATEWAY = "192.168.1.1"
 STATIC_DNS = "192.168.1.1"
+
+# The shared LAN-only device token the remote service expects on every poll
+# (device-protocols.md section 1). Defence in depth only; never a real
+# boundary - anyone on the LAN could press the physical button (memo section
+# 10). It must never enter the committed tree or the update pack, so it lives
+# here and is materialised by scripts/gen-secrets.sh from Doppler. Absent ->
+# the remote poll is disabled on the board rather than sent unauthenticated.
+REMOTE_DEVICE_TOKEN = "your-device-token"

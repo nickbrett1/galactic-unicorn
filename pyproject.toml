@@ -7,7 +7,8 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.4"
+    "ruff>=0.4",
+    "pytest>=7"
 ]
 
 [build-system]
@@ -33,3 +34,10 @@ src = [".", "lib"]
 # constructs (f-strings, async/await, variable annotations) that this board
 # may not parse. See the README section "Linting firmware".
 target-version = "py37"
+
+[tool.pytest.ini_options]
+# The board's pure logic is unit-tested on the host under pytest (memo
+# section 6.4). The older tests/test_*.py are self-driven scripts (each has its
+# own main() and is run directly by the pipeline); pytest collects only the
+# test_* functions here, so both styles coexist without double-running.
+testpaths = ["tests"]

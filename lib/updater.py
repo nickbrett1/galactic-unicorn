@@ -52,7 +52,8 @@ import gc
 import json
 import os
 import struct
-import time
+
+import net
 
 try:
     from watchdog import feed as _wdt_feed
@@ -147,122 +148,21 @@ def _local_version():
     return _read(VERSION_FILE)
 
 
-def _wdt_sleep(ms):
-    """Sleep in fuse-sized steps. The fuse is 8 s and an attempt is 10 s."""
-    started = time.ticks_ms()
-    while time.ticks_diff(time.ticks_ms(), started) < ms:
-        _wdt_feed()
-        time.sleep_ms(200)
-
-
-def _wait_for_ip(wlan, budget_ms):
-    """True once the station has an IP. Feeds the fuse while it waits."""
-    started = time.ticks_ms()
-    while not wlan.isconnected():
-        if time.ticks_diff(time.ticks_ms(), started) > budget_ms:
-            return False
-        # The join can legitimately outlast the 8 s fuse, so this is
-        # load-bearing, not tidiness: without it a slow join resets the board.
-        _wdt_feed()
-        time.sleep_ms(200)
-    return True
-
+# --- wifi, delegated to the shared helper ----------------------------------
+# The associate/reconnect helper lives in lib/net.py now, so the updater and
+# the phase-2 remote poller share one radio implementation (and cannot drift).
+# These two wrappers keep updater's public names, signatures and log lines, so
+# nothing that imports updater - boot.py, main.py, tests/test_static_ip.py -
+# has to change, and updater's behaviour is byte-for-byte what it was.
 
 def apply_static_ip(wlan, config):
-    """Point the radio at a fixed address, if the network has reserved one.
-
-    Does nothing without a complete STATIC_* set, so the DHCP path is untouched
-    for anyone who has not configured it. Must be called with the interface
-    active and BEFORE connect(): with an address already set, connect() only has
-    to associate, which is the part that has always worked here.
-
-    Uses ipconfig(), NOT the older ifconfig((ip, mask, gw, dns)). On the rp2
-    port that 4-tuple leaves the board unable to resolve ANY name: every
-    socket.getaddrinfo raises OSError(-2), which cost the NTP sync all three
-    attempts and made the update check fail on every single boot. The network
-    was never at fault - raw DNS over UDP to the same server answered in
-    8-160 ms throughout - so it is the resolver's configuration, and it is a
-    known MicroPython regression (micropython#15695). The newer API separates
-    the two: wlan.ipconfig(addr4=..., gw4=...) sets the address, and
-    network.ipconfig(dns=...) sets the resolver for the whole stack.
-
-    Measured on this board, same address and same server, one after the other:
-    with ifconfig every lookup failed, with ipconfig pool.ntp.org resolved in
-    144 ms and ntptime.settime() then took 80 ms.
-    """
-    ip = getattr(config, "STATIC_IP", None)
-    if not ip:
-        return False
-    mask = getattr(config, "STATIC_MASK", None)
-    gateway = getattr(config, "STATIC_GATEWAY", None)
-    dns = getattr(config, "STATIC_DNS", None)
-    if not (mask and gateway and dns):
-        _log("static ip incomplete, using dhcp")
-        return False
-    try:
-        # Older firmware has no network.ipconfig, and there the 4-tuple
-        # ifconfig is both the only way and a working one - the regression
-        # arrived in 1.24, and network.ipconfig with it.
-        import network
-
-        wlan.ipconfig(addr4=(ip, mask), gw4=gateway)
-        network.ipconfig(dns=dns)
-        return True
-    except Exception as exc:  # noqa: BLE001 - fall back to the older form
-        _log("ipconfig could not set the static address", exc)
-    try:
-        wlan.ifconfig((ip, mask, gateway, dns))
-    except Exception as exc:  # noqa: BLE001 - DHCP is always the fallback
-        _log("could not set static ip, using dhcp", exc)
-        return False
-    return True
+    """updater's spelling of net.apply_static_ip, logging to update.log."""
+    return net.apply_static_ip(wlan, config, log=_log)
 
 
 def _join_wifi(config, attempts=WIFI_ATTEMPTS, attempt_ms=WIFI_ATTEMPT_MS):
-    if not config.WIFI_SSID:
-        return False
-    import network
-
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    # Applied even when the radio already reports a connection, and that order
-    # is load-bearing. After a SOFT reset the radio chip keeps the association,
-    # so isconnected() is true from the first line of boot.py - while lwip on
-    # the RP2040 starts again with no address and no resolver. A check that
-    # short-circuits on isconnected() therefore runs with name resolution
-    # broken, which is exactly what the log showed: a boot with no join in it
-    # at all, and "update failed, keeping current firmware: OSError(-2,)".
-    # Re-applying while connected is safe (measured: still connected, lookups
-    # went from failing to 66 ms, ntptime to 43 ms), and it is the only thing
-    # that puts the resolver back on that boot.
-    apply_static_ip(wlan, config)
-    if wlan.isconnected():
-        return True
-    # Before the first connect(): a reserved address means there is no DHCP
-    # exchange to hang on (see config.STATIC_IP).
-    # Association was never the problem: the board reaches "associated, no IP"
-    # (status 2) within a second or two and then sits there while DHCP never
-    # completes - for the WHOLE attempt. Measured on this board: boot.py's first
-    # join burned the full timeout and logged "no wifi", while main.py's join
-    # seconds later on the same radio got an IP in 4 s; a manual join got an IP
-    # 6/6 on one run and 0/6 three minutes later. So a single attempt is a coin
-    # flip, and a retry is what converts it - but the DHCP exchange has to be
-    # restarted, which needs a disconnect first.
-    for attempt in range(1, attempts + 1):
-        if attempt > 1:
-            try:
-                wlan.disconnect()
-            except Exception:  # noqa: BLE001, S110 - not connected is fine
-                pass
-            _wdt_sleep(500)
-        try:
-            wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
-        except OSError as exc:
-            _log("wifi connect raised", exc)
-        if _wait_for_ip(wlan, attempt_ms):
-            return True
-        _log(f"wifi attempt {attempt}/{attempts} got no IP")
-    return False
+    """updater's join: net.join_wifi with updater's budget and log."""
+    return net.join_wifi(config, attempts, attempt_ms, log=_log, feed=_wdt_feed)
 
 
 def _get(url):

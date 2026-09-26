@@ -53,6 +53,14 @@ config_secrets.py
 version.txt
 update.log
 
+# Written on the device by the phase-2 remote poller / the crash handler
+# (lib/remote.py, main.py): board-local state, never in the repo and never in
+# the update pack (the pack ships only main.py, config.py, routines.json and
+# lib/*.py - scripts/build-firmware-pack.py).
+remote.log
+applied_gen.txt
+crash.log
+
 # Python bytecode from the host-side harnesses
 __pycache__/
 

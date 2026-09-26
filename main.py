@@ -373,6 +373,19 @@ def main():
     engine = Engine(display, buttons, audio, ambient, config, routines, button_map)
     log(f"entering loop (state={engine.state_name()})")
 
+    # The phase-2 remote: a second producer of the same button events. It is
+    # constructed even when disabled, so the log always says which way it is -
+    # "disabled (no device token)" and "polling http://..." are very different
+    # things to find on a board that is not responding to the phone.
+    try:
+        from remote import Remote
+
+        remote = Remote(engine, config, log, fw=firmware_version())
+        log("remote: " + remote.describe())
+    except Exception as exc:  # noqa: BLE001 - the display must survive a bad remote
+        print_exception(exc)
+        remote = None
+
     # Collect proactively rather than only when an allocation fails: the
     # default (-1) lets the heap run to the wire, and an allocation failure at
     # the wrong moment takes the whole display down (it did - see ambient.py).
@@ -438,6 +451,12 @@ def main():
             # a deferral, not a skip: update_checked_at is left alone, so the
             # check runs on the first idle frame instead.
             and engine.routine is None
+            # ... and never while the remote poller says a COUNTDOWN/HANDOFF is
+            # live (device-protocols.md section 8.3): the check can block for
+            # ~30 s in a dead window, and a reboot there would unwind the
+            # countdown. The remote defers it too, so the rule is stated once
+            # on each side of the seam.
+            and (remote is None or not remote.busy())
         ):
             update_checked_at = time.ticks_ms()
             # lib/updater.py is EXCLUDED from the pack, so a release can reach
@@ -448,6 +467,12 @@ def main():
             if check is not None:
                 _checked_under_network_fuse(check, config)
         try:
+            # The remote, if present, gets one bounded poll at most per
+            # cadence. It emits the SAME button event the panel would, so the
+            # tick below handles it exactly as a physical press - nothing about
+            # the state machine changes.
+            if remote is not None:
+                remote.poll_if_due(now)
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.
         except Exception as exc:  # noqa: BLE001

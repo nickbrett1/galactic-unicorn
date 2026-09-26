@@ -71,6 +71,11 @@ class Engine:
 
         self.path = _serpentine_path()
         self.path_len = len(self.path)
+        # Events posted from a non-button producer (the remote). Drained at the
+        # top of tick() and handled by the SAME dispatch as a physical press,
+        # so the panel's rules are unchanged: the remote is a second producer
+        # of the button events, not a feature (memo section 3).
+        self._injected = []
 
     # -- helpers ---------------------------------------------------------
 
@@ -82,6 +87,41 @@ class Engine:
 
     def state_name(self):
         return self.state
+
+    def routine_id(self):
+        """The current routine's wire id, or None. For the observed report."""
+        if self.routine is None:
+            return None
+        return self.routine.get("id")
+
+    def remaining_s(self, now):
+        """Seconds left on the countdown, as the contract's integer."""
+        return self.remaining_ms(now) // 1000
+
+    def post_event(self, event):
+        """Queue a wire event (a routine id or "reset") from a non-button source.
+
+        The remote emits the SAME event the button would (memo section 3), so
+        this translates it to the button press that produces it and hands it to
+        the ordinary button dispatch on the next tick. Nothing about the state
+        machine changes: a routine event is still inert during COUNTDOWN, and
+        reset is still the D event, live in every active state.
+        """
+        self._injected.append(event)
+
+    def _button_event(self, event):
+        """The (kind, name) button event that produces wire `event`, or None."""
+        if event == "reset":
+            # D. A press cancels everywhere EXCEPT COUNTDOWN when a hold is
+            # configured (config.D_CANCEL_HOLD_MS) - the remote must reproduce
+            # whatever the panel's own D rule currently is.
+            if self.state == COUNTDOWN and self.config.D_CANCEL_HOLD_MS > 0:
+                return ("hold", "D")
+            return ("press", "D")
+        for name, rid in self.button_map.items():
+            if rid == event:
+                return ("press", name)
+        return None
 
     def remaining_ms(self, now):
         r = time.ticks_diff(self.end_ticks, now)
@@ -274,6 +314,14 @@ class Engine:
 
     def tick(self, now):
         events = self.buttons.poll(now)
+        # Remote events arrive between polls; fold them into the same list so
+        # they take exactly the path a physical press takes.
+        if self._injected:
+            for event in self._injected:
+                mapped = self._button_event(event)
+                if mapped is not None:
+                    events.append(mapped)
+            del self._injected[:]
         self._handle_events(events, now)
 
         # Dark room -> the clock and the breathing pixel go dark (they are

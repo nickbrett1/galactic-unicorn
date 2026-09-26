@@ -27,13 +27,21 @@ steps:
     commands:
       - python -m pip install --no-cache-dir -e ".[dev]"
       - ruff check .
+      # The board's pure logic, unit-tested on the host under pytest (memo
+      # section 6.4). This is Phase C's board-independent half: the reconcile
+      # decision and the observed-state report builder have no sockets, so they
+      # run here on CPython against plain values. pytest collects only the
+      # test_* functions; the self-driven scripts below keep their own runner.
+      - python3 -m pytest tests/ -q
       # The host-only regression tests the step's own label always promised.
       # They run on CPython against shims (a fake WLAN, a controllable
       # ticks_ms, a fake synth channel), so they need no board and no hardware
-      # - which is exactly why they belong here and not in a deploy. The glob
-      # is the point: a new tests/test_*.py is picked up by existing files, not
-      # by someone remembering to add it. No dependencies, so nothing to
-      # install beyond the dev extra already done above.
+      # - which is exactly why they belong here and not in a deploy. These are
+      # the self-driven scripts (each has its own main()); pytest-style files
+      # are covered by the pytest step above and are a no-op here. The glob is
+      # the point: a new self-driven tests/test_*.py is still picked up
+      # automatically. No dependencies, so nothing to install beyond the dev
+      # extra already done above.
       - |
         for t in tests/test_*.py; do
           echo "--- $$t"

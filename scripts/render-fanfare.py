@@ -5,10 +5,10 @@ the host.
     python3 scripts/render-fanfare.py [out.wav]      # default fanfare.wav
 
 There is usually no board on the wire when a note list is being edited, and
-"does this sound exciting" is not a question a unit test can answer. This
-renders lib/sound.DONE_SOUND with the same square wave and the same envelope
-lib/sound.Audio configures on the synth, so a change can be auditioned before
-it is flashed.
+"does this sound warm or does it sound like an alarm" is not a question a unit
+test can answer. This renders lib/sound.DONE_SOUND with the same triangle wave
+and the same envelope lib/sound.Audio configures on the synth, so a change can
+be auditioned before it is flashed.
 
 A PREVIEW, NOT A MEASUREMENT: this is an off-board approximation of a synth
 whose implementation lives in the board's firmware. Frequencies and durations
@@ -33,18 +33,19 @@ import sound
 RATE = 22050
 
 # The envelope Audio._configure sets on the channel, and the amplitudes it
-# ends up at: channel volume x the board's global volume.
-ATTACK, DECAY, SUSTAIN, RELEASE = 0.01, 0.08, 0.85, 0.12
-CHANNEL_VOLUME = 0.8
+# ends up at: channel volume x the board's global volume. Kept in step with
+# lib/sound.py - the ta-da is TRIANGLE with a gentle attack/release.
+ATTACK, DECAY, SUSTAIN, RELEASE = 0.04, 0.08, 0.85, 0.25
+CHANNEL_VOLUME = 0.75
 
 
 def envelope(t, dur):
     """ADSR at time t into a note of length dur, scaled to fit the note.
 
-    The fanfare's notes (80-90 ms) are all shorter than attack + decay, so the
-    sustain/release part barely appears in practice - which is exactly why the
-    notes read as plucks and why the run has rhythm rather than smearing into
-    one tone.
+    The pickup and lift notes (140-180 ms) are longer than attack + decay, so
+    the swell of the soft attack is heard on each; the held landing (950 ms) is
+    long enough to reach sustain and then fade through the long release, which
+    is what makes it ring out warm rather than poke like the old square run.
     """
     if dur <= 0:
         return 0.0
@@ -75,8 +76,8 @@ def render(notes, rate=RATE):
         for i in range(n):
             t = i / rate
             phase = (freq * t) % 1.0
-            square = 1.0 if phase < 0.5 else -1.0
-            samples.append(int(amp * envelope(t, dur) * square))
+            triangle = 4.0 * abs(phase - 0.5) - 1.0
+            samples.append(int(amp * envelope(t, dur) * triangle))
     return samples
 
 

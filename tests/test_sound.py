@@ -5,8 +5,9 @@
 
 The fanfare is a list of (frequency, seconds) pairs and a queue-and-go call,
 so a fake channel can record what the board would have played. What is under
-test is that it still reads as a *tune* - it moves, it peaks once, it lands -
-and that a synth which misbehaves still cannot take the display down with it.
+test is that it reads as a warm *ta-da* - it lifts, it peaks once, it lands,
+and it is never rapid or repeated like an alarm - and that a synth which
+misbehaves still cannot take the display down with it.
 
 The two properties that are easy to lose by editing a note list, and invisible
 without a board, are the ones asserted hardest: the tune must still fit inside
@@ -110,13 +111,30 @@ def case_fits_handoff():
 
 def case_moves():
     notes = [f for f, _ in sound.DONE_SOUND]
-    # It used to be three notes; a tune needs more than a few, and more than a
-    # couple of pitches, or it is a tone with a wobble on it.
-    ok = len(notes) >= 8 and len(set(notes)) >= 4
+    # The ta-da is deliberately short - a pickup, a three-note lift and one
+    # landing (5 notes, 5 pitches) - so this pins "more than a tone" without
+    # demanding the length of the fast run it replaced.
+    ok = len(notes) >= 5 and len(set(notes)) >= 4
     return _report(
-        "the tune is long enough and varied enough to be a tune",
+        "the tune has enough notes and pitches to be a phrase",
         ok,
         f"{len(notes)} notes, {len(set(notes))} distinct",
+    )
+
+
+def case_no_alarm():
+    notes = [f for f, _ in sound.DONE_SOUND]
+    durs = [d for _, d in sound.DONE_SOUND]
+    # An alarm is a rapid run of repeated high beeps. Forbid the two things that
+    # make one: no note is a rapid tick, and no pitch is repeated back to back
+    # (the held landing is a single entry, so it cannot trip the repeat check).
+    rapid = min(durs) < 0.1
+    repeats = any(a == b for a, b in zip(notes, notes[1:]))
+    ok = not rapid and not repeats
+    return _report(
+        "nothing rapid, no immediate repeats: a ta-da, not an alarm",
+        ok,
+        f"min {min(durs):.2f}s, repeats={repeats}",
     )
 
 
@@ -169,11 +187,14 @@ def case_queues_in_order():
     )
 
 
-def case_configured_square():
+def case_configured_triangle():
     _, _, channel = build()
     waveform, kwargs = channel.configured
-    ok = waveform == channel.SQUARE and kwargs.get("volume") == 0.8
-    return _report("channel is configured square, positional waveform", ok, f"{kwargs}")
+    # TRIANGLE, not SQUARE: the warmer waveform is half of "ta-da, not alarm".
+    ok = waveform == channel.TRIANGLE and kwargs.get("volume") == 0.75
+    return _report(
+        "channel is configured triangle (warm), positional waveform", ok, f"{kwargs}"
+    )
 
 
 def case_play_tone_failure_is_silent():
@@ -244,11 +265,12 @@ def main():
         case_wellformed(),
         case_fits_handoff(),
         case_moves(),
+        case_no_alarm(),
         case_has_rising_run(),
         case_peaks_once(),
         case_lands(),
         case_queues_in_order(),
-        case_configured_square(),
+        case_configured_triangle(),
         case_play_tone_failure_is_silent(),
         case_play_synth_failure_is_silent(),
         case_muted_is_quiet(),

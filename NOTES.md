@@ -96,3 +96,47 @@ The board-facing half of Phase C, derived from memo §6 and the frozen
 
 Still not done: any board flash or deploy, and running the two suites against
 the real radio (no emulator — memo §6.4). The pure half is what pytest pins.
+
+## T1 — task: cleanup 3->5 min + warmer "ta-da" DONE_SOUND (2026-09-26)
+
+Plan, in order:
+1. routines.json cleanup "minutes": 3 -> 5 (engine reads it at lib/routine.py:147;
+   bathtime/booktime stay 5).
+2. lib/sound.py DONE_SOUND -> warm ta-da (G4 C5 E5 G5 -> C6 held), _configure ->
+   TRIANGLE, attack 0.04, release 0.25, volume 0.75. Update docstrings.
+3. scripts/render-fanfare.py -> triangle + new envelope (stays in sync).
+4. tests/test_sound.py -> triangle case, relax note-count for the simpler tune,
+   add a no-alarm property (no immediate repeats, no rapid notes).
+5. python3 -m pytest tests/ -q ; ruff check . ; python3 scripts/render-fanfare.py
+6. ./scripts/deploy.sh ; confirm board banner + new build.
+
+BOARD STATE at T1 start: /dev/tty.usbmodem201NTFA540352 is present but SILENT.
+find-board.sh: 10/10 rounds no REPL (exit 3). raw serial Ctrl-C/Ctrl-D -> b''.
+mpremote connect -> "could not enter raw repl". The repo's find-board.sh says this
+is the power-cycle case. Doing the code+test work first, deploy last.
+
+### T1 edits + host checks (done)
+
+- routines.json: cleanup "minutes": 3 -> 5.
+- lib/sound.py: DONE_SOUND = [(392,0.14),(523,0.14),(659,0.14),(784,0.18),(1047,0.95)];
+  _configure -> TRIANGLE, attack=0.04 decay=0.08 sustain=0.85 release=0.25 volume=0.75.
+- scripts/render-fanfare.py -> triangle + new envelope (32 kHz... no, 22050).
+- tests/test_sound.py: triangle case, relaxed note count, added case_no_alarm.
+
+Host results: pytest 41 passed; ruff clean; test_sound.py 14/14;
+render: 5 notes, 1.55s, no >half-HANDOFF warning.
+
+Next: deploy.sh. Board was silent at start; retry now.
+
+### T1 deploy attempt (blocked)
+
+./scripts/deploy.sh ran: gen-secrets.sh OK (doppler -> config_secrets.py,
+ssid set, static 192.168.1.63, device_token set). Then step 2 find-board.sh:
+10/10 rounds, board never answered as a REPL -> exit 3, deploy aborted BEFORE
+any file was pushed or the board was reset. No code reached the board.
+
+Direct evidence the board is silent (not a wrong-port guess):
+  /dev/tty.usbmodem201NTFA540352 present; raw Ctrl-C/Ctrl-D -> b'';
+  mpremote connect -> TransportError: could not enter raw repl.
+find-board.sh's own instruction for this exact state: "Power-cycle the board,
+then re-run." NEEDS A PHYSICAL RE-PLUG / POWER-CYCLE. Not guessing a port.

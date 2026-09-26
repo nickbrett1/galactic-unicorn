@@ -29,7 +29,7 @@
       "id": "cleanup",
       "label": "Cleanup",
       "kind": "lead-in",
-      "minutes": 3,
+      "minutes": 5,
       "button": "C",
       "symbol": "toy-box",
       "end_message": "CLEAN UP!"

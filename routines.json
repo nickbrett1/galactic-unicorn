@@ -3,7 +3,7 @@
   "buttons": {
     "A": "bathtime",
     "B": "booktime",
-    "C": "tidyup",
+    "C": "cleanup",
     "D": "cancel"
   },
   "routines": [
@@ -26,13 +26,13 @@
       "end_message": "BOOK TIME!"
     },
     {
-      "id": "tidyup",
-      "label": "Tidy",
+      "id": "cleanup",
+      "label": "Cleanup",
       "kind": "lead-in",
       "minutes": 3,
       "button": "C",
-      "symbol": "boxes",
-      "end_message": "TIDY UP!"
+      "symbol": "toy-box",
+      "end_message": "CLEAN UP!"
     }
   ]
 }

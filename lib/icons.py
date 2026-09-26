@@ -191,7 +191,9 @@ ICONS = {
     "tap": TAP,
     "shower": SHOWER,
     "book": BOOK,
-    "boxes": BOXES,
+    # The wire/server name for the third routine's symbol (routines.json).
+    # Was "boxes"; renamed so the panel draws the routine the server sends.
+    "toy-box": BOXES,
 }
 
 

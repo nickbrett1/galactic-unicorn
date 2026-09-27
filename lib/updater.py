@@ -45,11 +45,17 @@ it is not by itself what makes it *recovered* - measured on hardware, a board
 whose main.py raises just sits at the REPL forever, and repair then waits on
 someone power-cycling it. So there is also a rollback slot:
 
-  * before a release overwrites the tree, the tree is copied to :prev/
+  * before a release overwrites the tree, the files it is about to replace are
+    MOVED into :prev/ (renamed, never copied: a copy is a third resident tree,
+    and live + :next + :prev does not fit on this board's 768 KB filesystem)
   * main.py writes boot-ok.txt once it has actually come up
   * the next boot compares the two; a release that has had its single chance
     and never reported in gets the previous tree put back, offline, so the
     board comes up on something that works.
+  * an apply that is interrupted is put back too: it announces itself in
+    applying.txt before the first file moves, so a boot that finds that marker
+    knows the live tree has holes in it and restores :prev even though
+    version.txt and boot-ok.txt both still name the old, proven release.
 
 Nothing is blacklisted. A release that fails this way is simply not running any
 more, and the fix is to repair it and publish a new version on top - an owner
@@ -76,6 +82,12 @@ VERSION_FILE = "version.txt"
 PACK_PATH = ":incoming.pack"
 NEXT_DIR = ":next"
 CHUNK = 1024
+# Hashing (a pack file, a rollback copy, the live tree) streams through this, so
+# no step ever holds a whole file: on this board the heap is ~126 KB and the
+# biggest managed file is ~30 KB, but it is the ALLOCATION that matters, not the
+# file - a single contiguous read is what fails. Same reason the pack download
+# streams through a sink.
+SHA_CHUNK = 1024
 # One join ATTEMPT. Association is quick and reliable; it is IP acquisition
 # that can hang for the whole attempt, so the useful knob is how many attempts
 # we make, not how long a single one is (see _join_wifi).
@@ -125,6 +137,11 @@ MAX_PACK_BYTES = 512 * 1024
 # back a release that was perfectly good, twice.
 PREV_DIR = ":prev"
 PREV_INFO = "prev.json"
+# Written before the first file moves in an apply, cleared once version.txt has
+# been stamped. It is the difference between "an apply finished" and "an apply
+# was interrupted", which the version files alone cannot express once files are
+# MOVED into :prev rather than copied (see _plan_rollback and _apply).
+APPLYING_FILE = "applying.txt"
 BOOT_OK_FILE = "boot-ok.txt"
 BOOT_TRY_FILE = "boot-try.txt"
 BOOT_FAILS_FILE = "boot-fails.txt"
@@ -144,6 +161,33 @@ def _log(message, exc=None):
             os.remove(LOG_FILE)
         with open(LOG_FILE, "a") as fh:
             fh.write(line + "\n")
+    except Exception:  # noqa: BLE001, S110 - logging must never be fatal
+        pass
+
+
+def _log_traceback(exc):
+    """Append a full traceback for `exc` to update.log.
+
+    _log only records repr(exc), which for a MemoryError is a single line with
+    no frame - and a bare "allocating 4352 bytes" is not enough to find which
+    statement asked for it. This is temporary instrumentation: it is the reason
+    we can pin an in-loop OTA failure at all, because the allocation happens
+    deep inside a helper with no other way to see the frame. Best effort, like
+    every other log here: a failure to log must never be the failure.
+    """
+    try:
+        import sys
+
+        size = 0
+        try:
+            size = os.stat(LOG_FILE)[6]
+        except OSError:
+            pass
+        if size > LOG_LIMIT:
+            os.remove(LOG_FILE)
+        with open(LOG_FILE, "a") as fh:
+            fh.write("update: traceback follows\n")
+            sys.print_exception(exc, fh)
     except Exception:  # noqa: BLE001, S110 - logging must never be fatal
         pass
 
@@ -355,16 +399,56 @@ def _cleanup():
     _rmtree(NEXT_DIR)
 
 
+def _sha256_file(path):
+    """sha256 of a file, read in small chunks. Never holds the file whole."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            _wdt_feed()
+            chunk = fh.read(SHA_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return _hexdigest(digest)
+
+
 def _apply(written, version):
+    """Install the staged tree, moving what it replaces into the rollback slot.
+
+    Every replaced file is MOVED into :prev by rename, not copied. A copy is a
+    whole extra resident tree - live + :next + :prev all at once - and on this
+    board's 768 KB filesystem that is what made a full release fail with
+    OSError(28), ENOSPC, in _archive_current's write (measured 2026-09-27):
+    ~200 KB live + ~180 KB :next + ~180 KB :prev does not fit. Moving gives
+    :prev the old files for free, and the peak is one tree plus its successor.
+    """
+    # Announced BEFORE the first move. From here until version.txt is stamped,
+    # a file can be resident in :prev and not yet in the live tree, so the tree
+    # is momentarily incomplete - and with the OLD version.txt still in place
+    # boot.py would judge the running release proven (boot-ok matches) and DROP
+    # the rollback copy, stranding the board on a broken tree. This marker is
+    # what makes _recover roll back an apply that did not finish, whatever the
+    # version files say.
+    _write(APPLYING_FILE, version)
     for rel in written:
         # Renaming a file is fast, but `written` is the whole tree and this
         # runs under whatever fuse is already armed, so feed per file.
         _wdt_feed()
+        dest = PREV_DIR + "/" + rel
+        _mkdirs(dest)
+        _clear(dest)
+        try:
+            os.rename(rel, dest)
+        except OSError:
+            pass  # a file this release ADDS has nothing to move aside
         os.rename(NEXT_DIR + "/" + rel, rel)
     # version.txt is written LAST: an interrupted apply re-runs the whole update
     # on the next boot rather than half-adopting it.
     with open(VERSION_FILE, "w") as fh:
         fh.write(version + "\n")
+    _clear(APPLYING_FILE)
 
 
 def _reset():
@@ -385,33 +469,48 @@ def _has_rollback():
         return False
 
 
-def _archive_current(version, managed):
-    """Copy the live tree into :prev before a release overwrites it.
+def _drop_proven_rollback():
+    """Free the rollback slot once the running release has proven itself.
 
-    This is the rollback slot, and it must live on FLASH: the whole point is to
-    recover from a release that never comes up, and that must not depend on the
-    network which delivered it, nor on the owner being in the room.
+    boot-ok == version means this tree has come up and soaked, so the copy of
+    what it replaced is dead weight. _recover drops it, but only on the boot
+    AFTER boot-ok is written - and until it does, the slot sits there for the
+    whole session. On this board's 768 KB filesystem that is ~167 KB the next
+    in-loop update needs (measured 2026-09-27: free 424 KB clean, 44 KB with
+    the slot resident), which is enough on its own to make it fail OSError(28).
+    The running app is exactly where the in-loop check spends its flash, so it
+    drops the slot here too, not only at boot.
+    """
+    version = _read(VERSION_FILE)
+    if version and _read(BOOT_OK_FILE) == version:
+        _clear(PREV_INFO)
+        _rmtree(PREV_DIR)
+
+
+def _plan_rollback(version, managed):
+    """Record the rollback plan for a release that is about to be installed.
+
+    This is the rollback slot's index, and it must live on FLASH: the whole
+    point is to recover from a release that never comes up, and that must not
+    depend on the network which delivered it, nor on the owner being in the
+    room. The old tree's BYTES are not copied here - _apply moves each replaced
+    file into :prev as it replaces it (see _apply for why a copy cannot fit) -
+    but its hashes are, so _rollback can still prove the copy is intact before
+    it puts anything back.
 
     `managed` is the incoming release's file list - exactly the set that is
     about to be replaced - and is recorded so a rollback can also delete any
     file the bad release ADDED, leaving the previous tree's shape and not a mix.
     """
-    import hashlib
-
     _rmtree(PREV_DIR)
     entries = []
     for path in managed:
         _wdt_feed()
         try:
-            with open(path, "rb") as fh:
-                data = fh.read()
+            digest = _sha256_file(path)
         except OSError:
             continue  # not on the device yet, so there is nothing to put back
-        dest = PREV_DIR + "/" + path
-        _mkdirs(dest)
-        with open(dest, "wb") as out:
-            out.write(data)
-        entries.append({"path": path, "sha256": _hexdigest(hashlib.sha256(data))})
+        entries.append({"path": path, "sha256": digest})
     with open(PREV_INFO, "w") as fh:
         json.dump({"version": version, "files": entries, "managed": list(managed)}, fh)
     return entries
@@ -424,17 +523,13 @@ def _rollback():
     update version.txt. A corrupt rollback copy must not be half-applied on top
     of a tree that is already broken.
     """
-    import hashlib
-
     with open(PREV_INFO) as fh:
         info = json.load(fh)
     entries = info["files"]
     restored = set()
     for entry in entries:
         _wdt_feed()
-        with open(PREV_DIR + "/" + entry["path"], "rb") as fh:
-            data = fh.read()
-        if _hexdigest(hashlib.sha256(data)) != entry["sha256"]:
+        if _sha256_file(PREV_DIR + "/" + entry["path"]) != entry["sha256"]:
             raise ValueError("rollback copy of " + entry["path"] + " is corrupt")
         restored.add(entry["path"])
     # Files the failed release added are removed, so the tree is the previous
@@ -450,6 +545,7 @@ def _rollback():
     _clear(BOOT_TRY_FILE)
     _clear(BOOT_FAILS_FILE)
     _clear(PREV_INFO)
+    _clear(APPLYING_FILE)
     _rmtree(PREV_DIR)
     return info["version"]
 
@@ -472,13 +568,32 @@ def _recover():
     optimisation: it also means the protocol only engages for trees this
     updater installed, so a tree deployed over USB - which may predate
     boot-ok.txt entirely - is never judged by rules it cannot satisfy.
+
+    A fourth state is judged FIRST, before any of those: an apply that did not
+    finish. It outranks them because it means files are missing from the live
+    tree - moved into :prev but not yet replaced - so the tree must be put back
+    even though version.txt and boot-ok.txt both still name the old, proven
+    release. Judged in the normal order it would look proven, and its rollback
+    copy would be dropped, stranding the board on a tree with holes in it.
     """
+    if _read(APPLYING_FILE):
+        if _has_rollback():
+            previous = _rollback()
+            _log(
+                "recovered an interrupted apply: rolled back to "
+                + (previous or UNKNOWN_VERSION)
+            )
+            _cleanup()
+            return True
+        _clear(APPLYING_FILE)  # nothing to put back: finish the bookkeeping
+        return False
+
     version = _read(VERSION_FILE)
     if not version:
         return False  # not OTA-managed at all yet
     if _read(BOOT_OK_FILE) == version:
         # Proven: retire the attempt and counter, and drop the rollback slot
-        # (a fresh copy is taken before the next apply). Left resident the slot
+        # (a fresh one is taken before the next apply). Left resident the slot
         # is a permanent ~170 KB leak on this board's 768 KB filesystem -
         # measured 2026-09-27, and enough on its own to make every later update
         # fail with OSError(28,), ENOSPC.
@@ -515,6 +630,7 @@ def _update(config):
     # enough to turn one ENOSPC into a permanent failure loop - measured
     # 2026-09-27: free fell to 236 KB and every update then failed OSError(28).
     _cleanup()
+    _drop_proven_rollback()
     manifest = json.loads(_fetch(config.UPDATE_MANIFEST_URL, timeout_s))
     version = manifest["version"]
     current = _local_version()
@@ -539,11 +655,16 @@ def _update(config):
     # the one part that is re-downloadable. :next is the only staged copy the
     # apply needs (and _cleanup still sweeps both).
     _clear(PACK_PATH)
-    # Only now - new pack downloaded, every file verified in :next/ - spend the
-    # flash on a rollback copy of the tree we are about to replace.
-    _archive_current(current or UNKNOWN_VERSION, [e["path"] for e in manifest["files"]])
+    # Only now - new pack downloaded, every file verified in :next/ - record the
+    # rollback plan for the tree we are about to replace. Nothing is copied:
+    # _apply moves each replaced file into :prev as it goes, so :next and :prev
+    # are never both fully resident (see _plan_rollback and _apply).
+    _plan_rollback(current or UNKNOWN_VERSION, [e["path"] for e in manifest["files"]])
     _apply(written, version)
-    _log("applied " + version + " (" + str(size) + " bytes, " + str(len(written)) + " files)")
+    _log(
+        "applied " + version + " (" + str(size) + " bytes, "
+        + str(len(written)) + " files)"
+    )
     # Housekeeping must never be able to undo a good apply: the firmware is
     # already in place and version.txt already stamped by this point, so a
     # failure here is cosmetic and must be reported as such, not as a failed
@@ -608,6 +729,7 @@ def check_for_update(config):
             return False
         applied = _update(config)
     except Exception as exc:  # noqa: BLE001 - an update must not stop the display
+        _log_traceback(exc)
         _log("update check failed, keeping current firmware", exc)
         try:
             _cleanup()
@@ -666,6 +788,7 @@ def _run():
     try:
         applied = _update(config)
     except Exception as exc:  # noqa: BLE001 - any failure keeps the current firmware
+        _log_traceback(exc)
         _log("update failed, keeping current firmware", exc)
         try:
             _cleanup()

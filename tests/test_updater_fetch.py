@@ -182,6 +182,105 @@ def case_update_applies_a_release():
     )
 
 
+def case_apply_moves_the_old_tree_into_the_rollback_slot():
+    # The replaced files must land in :prev by RENAME, not by copy. A copy is a
+    # whole extra resident tree, and on the board's 768 KB filesystem
+    # live + :next + :prev does not fit: that is what made a full release fail
+    # with OSError(28), ENOSPC in _archive_current's write (measured
+    # 2026-09-27). This asserts the old bytes survive in :prev and that the
+    # apply did not also leave the source behind.
+    files = {"main.py": b"print('new main')\n", "lib/thing.py": b"VALUE = 2\n"}
+    blob, entries = _pack(files)
+    manifest = {
+        "name": "galactic-unicorn",
+        "version": "9.9.9",
+        "pack": {"file": "firmware.pack", "sha256": hashlib.sha256(blob).hexdigest()},
+        "files": entries,
+    }
+    ROUTES["/f/move.json"] = (200, json.dumps(manifest).encode())
+    ROUTES["/f/firmware.pack"] = (200, blob)
+
+    shutil.rmtree(TMP, ignore_errors=True)
+    os.makedirs(TMP)
+    _device_files(TMP)
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        with open(updater.VERSION_FILE, "w") as fh:
+            fh.write("9.9.8\n")
+        os.mkdir("lib")
+        with open("lib/thing.py", "w") as fh:
+            fh.write("VALUE = 1\n")
+        applied = updater._update(Config(f"http://127.0.0.1:{PORT}/f/move.json"))
+        with open(updater.PREV_DIR + "/lib/thing.py") as fh:
+            saved = fh.read()
+        with open("lib/thing.py") as fh:
+            live = fh.read()
+        next_gone = not os.path.exists(updater.NEXT_DIR)
+    finally:
+        os.chdir(cwd)
+    ok = (
+        applied is True
+        and "VALUE = 1" in saved
+        and "VALUE = 2" in live
+        and next_gone
+    )
+    return _report(
+        "the apply moves the old tree into :prev, not a copy",
+        ok,
+        f"saved={saved.strip()!r} live={live.strip()!r} next_gone={next_gone}",
+    )
+
+
+def case_interrupted_apply_is_rolled_back():
+    # An apply that died between "move the old file into :prev" and "install the
+    # staged file" leaves the live tree with a HOLE. version.txt and boot-ok.txt
+    # still both name the old release, so judged the normal way it looks proven
+    # and its rollback copy would be dropped - stranding the board on a tree
+    # that is missing files. The applying marker is what makes _recover put the
+    # old tree back instead.
+    shutil.rmtree(TMP, ignore_errors=True)
+    os.makedirs(TMP)
+    _device_files(TMP)
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        with open(updater.VERSION_FILE, "w") as fh:
+            fh.write("9.9.8\n")
+        with open(updater.BOOT_OK_FILE, "w") as fh:
+            fh.write("9.9.8\n")
+        old = b"OLD MAIN\n"
+        os.mkdir(updater.PREV_DIR)
+        with open(updater.PREV_DIR + "/main.py", "wb") as fh:
+            fh.write(old)
+        with open(updater.PREV_INFO, "w") as fh:
+            json.dump(
+                {
+                    "version": "9.9.8",
+                    "files": [
+                        {"path": "main.py", "sha256": hashlib.sha256(old).hexdigest()}
+                    ],
+                    "managed": ["main.py"],
+                },
+                fh,
+            )
+        with open(updater.APPLYING_FILE, "w") as fh:
+            fh.write("9.9.9\n")
+        restored = updater._recover()
+        has_main = os.path.exists("main.py")
+        with open("main.py") as fh:
+            body = fh.read()
+        marker_gone = not os.path.exists(updater.APPLYING_FILE)
+    finally:
+        os.chdir(cwd)
+    ok = restored is True and has_main and "OLD MAIN" in body and marker_gone
+    return _report(
+        "an interrupted apply is rolled back, not adopted",
+        ok,
+        f"restored={restored} main={has_main} marker_gone={marker_gone}",
+    )
+
+
 def case_update_sweeps_leftover_staging():
     # A failed attempt - or a rollback interrupted mid-flight - can leave the
     # pack and :next/ resident. On the board's 768 KB flash those leftovers
@@ -251,6 +350,7 @@ def _device_files(where):
     updater.NEXT_DIR = ":next"
     updater.PREV_DIR = ":prev"
     updater.PREV_INFO = "prev.json"
+    updater.APPLYING_FILE = "applying.txt"
     updater.VERSION_FILE = "version.txt"
 
 
@@ -266,6 +366,8 @@ def main():
             case_download_verifies_the_sha256(),
             case_download_rejects_a_bad_sha256(),
             case_update_applies_a_release(),
+            case_apply_moves_the_old_tree_into_the_rollback_slot(),
+            case_interrupted_apply_is_rolled_back(),
             case_update_sweeps_leftover_staging(),
             case_update_is_a_noop_on_the_same_version(),
         ]

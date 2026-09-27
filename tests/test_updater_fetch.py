@@ -182,6 +182,47 @@ def case_update_applies_a_release():
     )
 
 
+def case_update_sweeps_leftover_staging():
+    # A failed attempt - or a rollback interrupted mid-flight - can leave the
+    # pack and :next/ resident. On the board's 768 KB flash those leftovers
+    # alone made every later update fail with OSError(28), ENOSPC (measured
+    # 2026-09-27), so _update must sweep them before it spends any.
+    files = {"main.py": b"print('new main')\n"}
+    blob, entries = _pack(files)
+    manifest = {
+        "name": "galactic-unicorn",
+        "version": "9.9.9",
+        "pack": {"file": "firmware.pack", "sha256": hashlib.sha256(blob).hexdigest()},
+        "files": entries,
+    }
+    ROUTES["/f/sweep.json"] = (200, json.dumps(manifest).encode())
+    ROUTES["/f/firmware.pack"] = (200, blob)
+
+    _device_files(TMP)
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        with open(updater.VERSION_FILE, "w") as fh:
+            fh.write("9.9.8\n")
+        # Leftovers a previous attempt would have left behind.
+        with open(updater.PACK_PATH, "wb") as fh:
+            fh.write(b"stale pack" * 100)
+        os.mkdir(updater.NEXT_DIR)
+        with open(updater.NEXT_DIR + "/stale.py", "w") as fh:
+            fh.write("STALE = 1\n")
+        applied = updater._update(Config(f"http://127.0.0.1:{PORT}/f/sweep.json"))
+        stale_gone = not os.path.exists(updater.NEXT_DIR + "/stale.py")
+        pack_gone = not os.path.exists(updater.PACK_PATH)
+    finally:
+        os.chdir(cwd)
+    ok = applied is True and stale_gone and pack_gone
+    return _report(
+        "leftover pack and :next are swept before an update",
+        ok,
+        f"applied={applied} stale_gone={stale_gone} pack_gone={pack_gone}",
+    )
+
+
 def case_update_is_a_noop_on_the_same_version():
     ROUTES["/f/same.json"] = (200, b'{"version":"9.9.9"}')
     _device_files(TMP)
@@ -225,6 +266,7 @@ def main():
             case_download_verifies_the_sha256(),
             case_download_rejects_a_bad_sha256(),
             case_update_applies_a_release(),
+            case_update_sweeps_leftover_staging(),
             case_update_is_a_noop_on_the_same_version(),
         ]
     finally:

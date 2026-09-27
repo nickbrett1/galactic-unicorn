@@ -458,6 +458,13 @@ def _recover():
     if _read(BOOT_OK_FILE) == version:
         if _read(BOOT_TRY_FILE):  # proven: stop calling it a pending attempt
             _clear(BOOT_TRY_FILE)
+        # The release has come up, so the rollback copy has served its purpose
+        # and a fresh one is taken before the next apply. Left resident it is a
+        # permanent ~170 KB leak on this board's 768 KB filesystem - measured
+        # 2026-09-27, and enough on its own to make every later update fail
+        # with OSError(28,), ENOSPC.
+        _clear(PREV_INFO)
+        _rmtree(PREV_DIR)
         return False
     if not _has_rollback():
         return False
@@ -476,6 +483,13 @@ def _recover():
 def _update(config):
     base = config.UPDATE_MANIFEST_URL.rsplit("/", 1)[0]
     timeout_s = getattr(config, "UPDATE_TIMEOUT_S", 3)
+    # Sweep staging before spending flash on this attempt. A previous attempt
+    # that failed, or a rollback that did not finish, can leave the pack and
+    # :next/ resident; both are re-derivable and both are pure cost until the
+    # next run. On this board's 768 KB filesystem a single leftover pack is
+    # enough to turn one ENOSPC into a permanent failure loop - measured
+    # 2026-09-27: free fell to 236 KB and every update then failed OSError(28).
+    _cleanup()
     manifest = json.loads(_fetch(config.UPDATE_MANIFEST_URL, timeout_s))
     version = manifest["version"]
     current = _local_version()
@@ -559,6 +573,10 @@ def check_for_update(config):
         applied = _update(config)
     except Exception as exc:  # noqa: BLE001 - an update must not stop the display
         _log("update check failed, keeping current firmware", exc)
+        try:
+            _cleanup()
+        except Exception:  # noqa: BLE001, S110 - staging is a cost, not correctness
+            pass
         return False
     if applied:
         _reset()

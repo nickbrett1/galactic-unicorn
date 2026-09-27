@@ -98,6 +98,29 @@ def case(name, boot_ok, boot_try, want_rollback, want_version):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_proven_drops_slot():
+    """A proven release must not keep its rollback copy.
+
+    The copy is re-created before the next apply, so once boot-ok matches the
+    running version it is dead weight. On this board's 768 KB filesystem a
+    permanently resident ~170 KB slot was itself enough to make every later
+    update fail with OSError(28), ENOSPC (measured 2026-09-27).
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        lay_out_tree(tmp, "0.2.0", None)
+        updater._recover()
+        gone = not os.path.exists(updater.PREV_DIR) and not os.path.exists(
+            updater.PREV_INFO
+        )
+        verdict = "PASS" if gone else "FAIL"
+        print(f"{verdict:<4} {'proven release drops its rollback slot':<46} gone={gone}")
+        return gone
+    finally:
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_no_blacklist():
     """A rolled-back release must stay adoptable, and nothing else must be left.
 
@@ -141,6 +164,7 @@ def main():
         case("spent chance, no boot-ok -> roll back", "0.1.10", "0.2.0", True, "0.1.10"),
         # First boot of a release: its chance, and no judgement yet.
         case("first boot -> no judgement", "0.1.10", "0.1.10", False, "0.2.0"),
+        case_proven_drops_slot(),
         case_no_blacklist(),
     ]
     print()

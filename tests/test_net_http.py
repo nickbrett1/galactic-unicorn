@@ -27,13 +27,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
-import net  # noqa: E402
+import net
 
 ROUTES = {}
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802 - the name BaseHTTPRequestHandler calls
+    def do_GET(self):
         spec = ROUTES.get(self.path)
         if spec is None:
             self.send_response(404)

@@ -29,13 +29,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-import updater  # noqa: E402
+import updater
 
 ROUTES = {}
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         spec = ROUTES.get(self.path)
         if spec is None:
             self.send_response(404)
@@ -161,8 +161,10 @@ def case_update_applies_a_release():
         with open("lib/thing.py", "w") as fh:
             fh.write("VALUE = 1\n")
         applied = updater._update(Config(f"http://127.0.0.1:{PORT}/f/manifest.json"))
-        stamp = open(updater.VERSION_FILE).read().strip()
-        new_main = open("main.py").read()
+        with open(updater.VERSION_FILE) as fh:
+            stamp = fh.read().strip()
+        with open("main.py") as fh:
+            new_main = fh.read()
         prev_exists = os.listdir(updater.PREV_DIR)
     finally:
         os.chdir(cwd)

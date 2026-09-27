@@ -219,13 +219,10 @@ def _download(url, dest, expect_sha, timeout_s, limit=MAX_PACK_BYTES):
         fh.write(data)
         digest.update(data)
 
-    fh = open(dest, "wb")
-    try:
+    with open(dest, "wb") as fh:
         status, total = net.http_get(
             host, port, path, timeout_s, feed=_wdt_feed, sink=sink, read_cap=limit
         )
-    finally:
-        fh.close()
     if status != 200:
         raise OSError("http " + str(status))
     if _hexdigest(digest) != expect_sha:

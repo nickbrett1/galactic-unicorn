@@ -141,6 +141,19 @@ def poll_path(report, token):
     return "/device/poll?" + "&".join(parts)
 
 
+def should_cycle_radio(consecutive_link_failures, threshold):
+    """True when a run of link-up failures has earned a radio cycle.
+
+    Pure, so the policy is pinned on the host (tests/test_remote.py) while the
+    act it authorises is not. A threshold of 0 disables the recovery rather
+    than firing it immediately: "off" has to be expressible, and 0 is how the
+    rest of config spells it.
+    """
+    if not threshold or threshold <= 0:
+        return False
+    return consecutive_link_failures >= threshold
+
+
 def classify_failure(exc, free, link):
     """Which window was this: the heap or the link? (memo sections 6.2, 11.15).
 
@@ -357,6 +370,13 @@ class Remote:
         # write a line every second. Re-armed when the link comes back.
         self._link_warned = False
         self._disabled_reason = self._disabled()
+        # How many polls have failed in a row while the radio claimed to be up
+        # (see should_cycle_radio and net.radio_reset).
+        self.radio_reset_after = int(getattr(config, "RADIO_RESET_AFTER", 3))
+        self._fails_since_ok = 0
+        # A cycle the poller has ASKED for but not performed: the render loop
+        # owns the doing (see _cycle_radio and main.py).
+        self.cycle_pending = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -420,7 +440,79 @@ class Remote:
             self._poll(now)
         except Exception as exc:  # noqa: BLE001 - a poll must not kill the loop
             self._log_failure(exc, "poll", now)
+            self._note_failure()
             self._schedule(now, self.floor_ms)
+            return
+        if self._fails_since_ok:
+            # A silent success is invisible in the log, and "the poll stopped
+            # failing" is exactly the evidence a recovery needs. One line per
+            # outage, written where the failures were.
+            self._net_log(
+                "poll recovered after "
+                + str(self._fails_since_ok)
+                + " consecutive failures"
+            )
+        self._fails_since_ok = 0
+
+    def _note_failure(self):
+        """Count it, and cycle the radio once the run is long enough.
+
+        Only failures with the link UP count. A link that is honestly down is
+        `join_wifi`'s problem and it already retries; the state this exists for
+        is the one where nothing looks wrong and nothing gets through
+        (lib/net.py:radio_reset).
+        """
+        wlan = self._radio()
+        try:
+            link = wlan is not None and wlan.isconnected()
+        except Exception:  # noqa: BLE001 - an unreadable radio is not an up one
+            link = False
+        if not link:
+            self._fails_since_ok = 0
+            return
+        self._fails_since_ok += 1
+        if should_cycle_radio(self._fails_since_ok, self.radio_reset_after):
+            self._cycle_radio()
+
+    def _cycle_radio(self):
+        """Ask for a radio cycle. The render loop performs it, not the poll.
+
+        net.radio_reset tears the CYW43 driver down and brings it back up. This
+        runs immediately before engine.tick(), i.e. possibly while the matrix's
+        PIO/DMA is still writing a frame - and a teardown during pixel streaming
+        was measured to do nothing at all (isconnected() never went False, the
+        radio stayed deaf). So the poll only raises the request; main.py calls
+        take_cycle_request() at the top of a frame, where the display is idle,
+        and runs cycle_radio() there.
+        """
+        self._fails_since_ok = 0
+        self.cycle_pending = True
+        self._net_log(
+            str(self.radio_reset_after)
+            + " polls failed with the link up - the radio needs a cycle"
+        )
+
+    def take_cycle_request(self):
+        """True once per pending request: the render loop's cue to cycle."""
+        if not self.cycle_pending:
+            return False
+        self.cycle_pending = False
+        return True
+
+    def cycle_radio(self):
+        """Perform a deferred cycle. Called by the render loop, never by poll."""
+        try:
+            import net
+
+            recovered = net.radio_reset(self.config, log=self._net_log, feed=self._feed)
+        except Exception as exc:  # noqa: BLE001 - recovery must not kill the loop
+            self._log_failure(exc, "radio cycle", None)
+            return False
+        self._net_log(
+            "radio cycle recovered the radio" if recovered
+            else "radio cycle did not recover the radio"
+        )
+        return recovered
 
     def _schedule(self, now, ms):
         self.next_poll_at = time.ticks_add(now, ms)

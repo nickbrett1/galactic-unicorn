@@ -369,3 +369,225 @@ def join_wifi(config, attempts=3, attempt_ms=10000, log=None, feed=None):
             return True
         _log_with(log, "wifi attempt " + str(attempt) + "/" + str(attempts) + " got no IP")
     return False
+
+
+# --- cycling the radio itself -----------------------------------------------
+#
+# Everything above this line treats the interface as a thing that is either up
+# or down. It is not: it can also be UP AND DEAF, and that is the state that
+# made the remote poller useless on this board.
+#
+# Measured 2026-09-27. `wlan.isconnected()` returns True, `wlan.status()` is 3,
+# `wlan.ifconfig()` hands back a valid lease (192.168.1.63), `rssi` reads a
+# healthy -39 dBm - and every socket call dies with OSError(110) (ETIMEDOUT) at
+# exactly its own timeout, while the board stops answering ICMP from the LAN
+# entirely (0/24 pings, against 10/10 to the NAS from the same machine). The
+# board's own update.log and remote.log alternate
+# "no update: 0.1.29 is already running" with
+# "update failed, keeping current firmware: OSError(110,)" - so this is not a
+# remote-poller bug, it is the radio.
+#
+# What clears it, and what does not, both matter:
+#
+#   * `wlan.active(False); wlan.active(True)` clears it. Measured: 10/10 polls
+#     OK immediately after, then 180 s at a 3 s cadence with 3 isolated
+#     failures and no wedge - i.e. the radio comes back and STAYS back.
+#   * a soft reset does NOT clear it.
+#   * `machine.reset()` does NOT clear it either, which is the surprising one.
+#     The CYW43 is a separate chip with its own supply, so neither of the
+#     RP2040's resets powers it down; only a real power cycle does.
+#
+# That last fact is why this lives in firmware rather than in a procedure. Every
+# board-side "fix" a human can reach over USB - mpremote's reset, Ctrl-D - is a
+# reset of the wrong chip, so a wedged board stays wedged on the wall until
+# somebody unplugs it. A cycle the app can do itself is the only recovery that
+# does not need a person.
+#
+# The sleep between off and on is not decoration: `active(True)` immediately
+# after `active(False)` can return before the driver has finished tearing the
+# association down, and the rejoin then fails.
+#
+# And the teardown has to be VERIFIED. Measured 2026-09-27, from inside the
+# render loop: `active(False)` then `active(True)` returned in under a
+# millisecond, `isconnected()` never went False, and the radio stayed deaf. The
+# cycle "worked" only because nothing was checked - the same class of bug as
+# the unbounded NTP call, an operation with no number to compare against. An IP
+# is not evidence either: the wedge has isconnected() True and a valid lease.
+# So the cycle now does three things a no-op cannot fake - ask for the
+# association to be dropped, wait until the driver reports it HAS dropped, and
+# finish with a real TCP round trip - and reports honestly when it cannot.
+
+RADIO_SETTLE_MS = 1000
+RADIO_DOWN_MS = 3000
+RADIO_JOIN_MS = 15000
+RADIO_PROBE_MS = 2000
+
+
+def wait_for_link_down(wlan, budget_ms, feed=None):
+    """True once the station reports it has let go. Feeds the fuse while waiting.
+
+    The mirror of `wait_for_ip`, and load-bearing for the same reason: a wait
+    this long would otherwise expire the 8 s fuse on its own.
+    """
+    started = time.ticks_ms()
+    while True:
+        try:
+            connected = wlan.isconnected()
+        except Exception:  # noqa: BLE001 - an unreadable radio is not an up one
+            connected = False
+        if not connected:
+            return True
+        if time.ticks_diff(time.ticks_ms(), started) > budget_ms:
+            return False
+        if feed is not None:
+            feed()
+        time.sleep_ms(100)
+
+
+def tcp_probe(host, port, timeout_s, feed=None):
+    """One bounded TCP handshake. True only if the stack completed one.
+
+    The evidence the wedge cannot fake: while the radio is deaf `isconnected()`
+    is True and the lease is valid, but `connect()` dies OSError(110) at exactly
+    `timeout_s`. Nothing is sent and nothing is read - a completed handshake is
+    enough to say the stack is talking to the LAN again.
+    """
+    if feed is None:
+        feed = _noop
+    feed()
+    try:
+        addr = socket.getaddrinfo(host, port)[0][-1]
+    except OSError:
+        return False
+    sock = socket.socket()
+    try:
+        sock.settimeout(timeout_s)
+        sock.connect(addr)
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def split_host_port(url, default_port=80):
+    """Split "http://host:port[/path]" into (host, port); (None, None) on TLS.
+
+    A smaller copy of lib/remote.py's split_url, kept here so the radio
+    recovery verifies against the same literal IP the poller uses without
+    depending on the remote module being present.
+    """
+    if not url:
+        return None, None
+    rest = url
+    if rest.startswith("http://"):
+        rest = rest[7:]
+    elif rest.startswith("https://"):
+        return None, None
+    rest = rest.split("/", 1)[0]
+    if not rest:
+        return None, None
+    if ":" in rest:
+        host, _, port = rest.partition(":")
+        try:
+            return host, int(port)
+        except ValueError:
+            return None, None
+    return rest, default_port
+
+
+def _probe_target(config):
+    """(host, port) to verify a cycle against, or None.
+
+    The LAN service the poller uses is the right witness: it is the thing the
+    radio is FOR, it is on the board's own segment, and it is configured as a
+    literal IP so the probe costs no DNS. The update manifest's host is the
+    fallback - also literal - so a build with no remote still verifies.
+    """
+    for url in (getattr(config, "REMOTE_SERVICE_URL", None),
+                getattr(config, "UPDATE_MANIFEST_URL", None)):
+        host, port = split_host_port(url)
+        if host:
+            return host, port
+    return None
+
+
+def radio_reset(config, log=None, feed=None):
+    """Power-cycle the radio in software, rejoin, and PROVE it worked.
+
+    Not a `join_wifi` retry: joining assumes the interface works and the
+    association is what failed. This assumes the opposite - the interface
+    reports itself healthy and is not - so it takes the interface down entirely
+    and brings the driver back up before joining. Every step is bounded and
+    feeds the fuse, so it is safe to call from the render loop.
+
+    Returns True only when the interface was OBSERVED to go down, came back
+    with an IP, and then completed a real TCP round trip. Anything less returns
+    False and says which part could not be shown, so the caller can stop
+    claiming a recovery it did not get.
+    """
+    if not getattr(config, "WIFI_SSID", None):
+        return False
+    import network
+
+    wlan = network.WLAN(network.STA_IF)
+    try:
+        was = "connected=" + str(wlan.isconnected()) + " status=" + str(wlan.status())
+    except Exception:  # noqa: BLE001 - the log must not be what fails
+        was = ""
+    _log_with(log, "radio: cycling the interface" + (" (" + was + ")" if was else ""))
+    try:
+        wlan.active(False)
+    except Exception as exc:  # noqa: BLE001 - report it, do not raise into the loop
+        _log_with(log, "radio: could not take the interface down", exc)
+        return False
+    # active(False) alone is not enough to trust: ask for the association to be
+    # dropped as well, then wait until the driver admits it has. Without this
+    # wait every line below ran against a radio that had never restarted.
+    try:
+        wlan.disconnect()
+    except Exception as exc:  # noqa: BLE001 - reported, never raised into the loop
+        _log_with(log, "radio: disconnect raised", exc)
+    went_down = wait_for_link_down(
+        wlan, getattr(config, "RADIO_DOWN_MS", RADIO_DOWN_MS), feed
+    )
+    _log_with(
+        log,
+        "radio: interface is down" if went_down
+        else "radio: interface never reported down - the cycle did not take effect",
+    )
+    wdt_sleep(getattr(config, "RADIO_SETTLE_MS", RADIO_SETTLE_MS), feed)
+    try:
+        wlan.active(True)
+    except Exception as exc:  # noqa: BLE001
+        _log_with(log, "radio: could not bring the interface back up", exc)
+        return False
+    # Static IP first, exactly as join_wifi does it and for the same reason: a
+    # soft reset leaves the radio associated while lwip has no address, so the
+    # address has to be re-applied before anything resolves.
+    apply_static_ip(wlan, config, log)
+    try:
+        wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
+    except OSError as exc:
+        _log_with(log, "radio: connect raised", exc)
+    if not wait_for_ip(wlan, getattr(config, "RADIO_JOIN_MS", RADIO_JOIN_MS), feed):
+        _log_with(log, "radio: did not get an IP back")
+        return False
+    if not went_down:
+        # It came back because it never left. Rejoining proves nothing, and
+        # reporting "back up" here is the false report this rewrite exists to
+        # end - it is what let a no-op cycle look like a cure.
+        _log_with(log, "radio: rejoined, but the cycle did not take effect")
+        return False
+    target = _probe_target(config)
+    if target is None:
+        _log_with(log, "radio: back up (no endpoint configured to verify against)")
+        return True
+    # config carries the budget in ms, like every other board constant; sockets
+    # want seconds.
+    timeout_s = getattr(config, "RADIO_PROBE_MS", RADIO_PROBE_MS) / 1000.0
+    if tcp_probe(target[0], target[1], timeout_s, feed):
+        _log_with(log, "radio: back up and answering")
+        return True
+    _log_with(log, "radio: back up but still unreachable - the cycle did not take effect")
+    return False

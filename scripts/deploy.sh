@@ -13,10 +13,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# mpremote lives in the project venv, not on the container's PATH (the bare
-# name resolves to nothing -> exit 127). Put it on PATH so every direct call
-# below - and find-board.sh - uses the same working binary.
-export PATH="$PWD/.venv/bin:$PATH"
+# mpremote and pyserial live in a venv, not on PATH. Resolve a pair that
+# actually RUNS (see toolchain.sh: a bare `mpremote` exits 127, and the repo
+# venv synced in from the devcontainer is dead on the host), then use "$MPREMOTE"
+# for every call below - never a bare name, and never a PATH export, which would
+# only re-introduce the dead venv ahead of the good one.
+# shellcheck source=scripts/toolchain.sh
+. "$(cd "$(dirname "$0")" && pwd)/toolchain.sh"
+
+if [[ -z "$MPREMOTE" ]]; then
+  echo "deploy: no working mpremote (tried .venv, ~/.venv-mpremote, PATH)." >&2
+  exit 1
+fi
+echo "deploy: mpremote from ${MPREMOTE}"
 
 # 1. Secrets: Doppler -> config_secrets.py (gitignored).
 ./scripts/gen-secrets.sh
@@ -35,7 +44,7 @@ echo "deploy: board on ${port}"
 TRIES=60
 mpr() {
   local n=0
-  until mpremote connect "$port" "$@"; do
+  until "$MPREMOTE" connect "$port" "$@"; do
     n=$((n+1))
     if (( n >= TRIES )); then
       echo "deploy: mpremote $* failed after ${n} tries" >&2
@@ -51,7 +60,7 @@ mpr() {
 # that can replace itself is how you ship a brick). That makes THIS script the
 # only way either of them ever reaches the board, including the watchdog feeds
 # inside updater._join_wifi / updater._download.
-mpremote connect "$port" fs mkdir :lib 2>/dev/null || true
+"$MPREMOTE" connect "$port" fs mkdir :lib 2>/dev/null || true
 
 # An armed watchdog outlives a soft reset (lib/watchdog.py), so a board parked
 # at the REPL still has an 8 s fuse burning - and Ctrl-C is what put it there.
@@ -61,7 +70,7 @@ mpremote connect "$port" fs mkdir :lib 2>/dev/null || true
 # whose lib/ predates the module.
 feed() {
   local n=0
-  until mpremote connect "$port" exec 'import machine; machine.WDT(timeout=8000)' 2>/dev/null; do
+  until "$MPREMOTE" connect "$port" exec 'import machine; machine.WDT(timeout=8000)' 2>/dev/null; do
     n=$((n+1)); (( n >= TRIES )) && return 0; sleep 1
   done
 }

@@ -9,15 +9,18 @@
 set -euo pipefail
 shopt -s nullglob
 
-# The container ships mpremote in the project venv, not on PATH. A bare
-# `mpremote` probe therefore exits 127 ("command not found"), which is
-# indistinguishable from "this node is not a REPL" and makes every board look
-# dead. Resolve the real binary first, preferring the venv next to this script.
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MPREMOTE="$ROOT/.venv/bin/mpremote"
-[[ -x "$MPREMOTE" ]] || MPREMOTE="$(command -v mpremote || echo mpremote)"
-PYTHON="$ROOT/.venv/bin/python"
-[[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || echo python3)"
+# mpremote and pyserial live in a venv, not on PATH; scripts/toolchain.sh
+# resolves a pair that actually RUNS (a bare `mpremote` exits 127, and the repo
+# venv synced in from the devcontainer is dead on the host - both indistinguishable
+# from "this node is not a REPL").
+# shellcheck source=scripts/toolchain.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/toolchain.sh"
+
+if [[ -z "$PYTHON" ]]; then
+  echo "find-board: no python with pyserial (tried .venv, ~/.venv-mpremote, PATH)." >&2
+  echo "  The REPL probe cannot run, so no port can be identified." >&2
+  exit 3
+fi
 
 # Fast, side-effect-free REPL probe. `mpremote connect <node> exec` spends its
 # WHOLE timeout (5 s) hanging on a node that is present but not a REPL - here,
@@ -25,21 +28,31 @@ PYTHON="$ROOT/.venv/bin/python"
 # in the gaps where the resetting board's node is momentarily absent. Instead:
 # open the CDC, poke it with Ctrl-C, and accept it only if the reply carries a
 # MicroPython prompt. Sub-second, so we can afford many more rounds.
+#
+# The reply is read until a prompt appears or a short deadline passes, not once
+# after a fixed sleep: a board that is mid-render-loop can take a moment to
+# answer, and a single 0.4 s read saw the banner but not the `>>>` that follows
+# it - which read as "not a REPL" on a board that was one.
 repl_answers() {
   "$PYTHON" - "$1" <<'PY' 2>/dev/null
 import sys, time, serial
 try:
-    s = serial.Serial(sys.argv[1], 115200, timeout=0.4)
+    s = serial.Serial(sys.argv[1], 115200, timeout=0.2)
 except Exception:
     sys.exit(1)
+buf = b''
 try:
-    s.write(b'\r\x03\x03'); time.sleep(0.4); d = s.read(400)
+    s.write(b'\r\x03\x03')
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        buf += s.read(400) or b''
+        if b'>>>' in buf or b'MicroPython' in buf:
+            break
 except Exception:
     sys.exit(1)
 finally:
     s.close()
-d = d or b''
-sys.exit(0 if (b'>>>' in d or b'MicroPython' in d) else 1)
+sys.exit(0 if (b'>>>' in buf or b'MicroPython' in buf) else 1)
 PY
 }
 

@@ -83,10 +83,31 @@ EXTEND_MINUTES = 2
 # (the usual case) sync_ntp() skips immediately, so leaving this True is safe:
 # it costs nothing until config_secrets.py exists.
 WIFI_ENABLED = True
-NTP_HOST = "pool.ntp.org"
 
-# The first NTP query after association often fails (cold DNS/route, and
-# ntptime's own timeout is 1 s), so retry a few times before giving up.
+# The NTP server, as a LITERAL IP on purpose. `getaddrinfo` is the one call in
+# the NTP path that cannot be bounded by a socket timeout, and with
+# `pool.ntp.org` here a dead network made every boot's retry overshoot the
+# watchdog fuse (measured 2026-09-27: reset ~1 s after the third failure,
+# reset_cause=3, on every boot). A literal IP takes DNS out of the path
+# entirely, exactly as config.UPDATE_MANIFEST_URL does with the LAN service.
+#
+# 162.159.200.1 is Cloudflare's anycast time service (time.cloudflare.com), and
+# 216.239.35.0 is Google's (time.google.com). Both are anycast, so no single
+# datacentre is a dependency. Tried in order, one attempt each.
+NTP_HOSTS = ("162.159.200.1", "216.239.35.0")
+NTP_HOST = NTP_HOSTS[0]  # kept: anything reading a single host still works
+
+# The bound on ONE NTP exchange - the send and the read alike
+# (lib/net.py:ntp_time sets it on the socket). NTP retries from main.py feed
+# the watchdog and then call out, so this is the longest stretch that runs
+# unfed; it MUST stay comfortably under lib/watchdog.py's TIMEOUT_MS, which is
+# what tests/test_net_ntp.py asserts. 2 s against an 8 s fuse leaves room for
+# a slow radio without ever reaching it.
+NTP_TIMEOUT_S = 2
+
+# A failing NTP exchange is now bounded and cheap, so a few retries cost
+# seconds rather than a reboot; the first query after association can still
+# fail while the route is cold.
 NTP_ATTEMPTS = 3
 NTP_RETRY_MS = 1000
 

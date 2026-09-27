@@ -146,3 +146,41 @@ def test_should_cycle_radio_zero_threshold_disables_recovery():
     assert remote.should_cycle_radio(0, 0) is False
     assert remote.should_cycle_radio(5, 0) is False
     assert remote.should_cycle_radio(5, None) is False
+
+
+# -- the cycle is DEFERRED to the render loop, never run inside the poll ------
+
+class _CycleStub:
+    """Only what _cycle_radio and take_cycle_request touch.
+
+    Taking the interface down while the matrix's PIO/DMA is mid-frame was
+    measured to do nothing at all on this board, so the poll must not do the
+    cycling itself - it asks, and main.py performs it at the top of the loop.
+    These tests pin that seam: asking touches no network and clears the run
+    counter, and one request is taken exactly once.
+    """
+
+    def __init__(self):
+        self.radio_reset_after = 3
+        self.cycle_pending = False
+        self._fails_since_ok = 3
+        self.logs = []
+
+    def _net_log(self, message):
+        self.logs.append(message)
+
+
+def test_cycle_radio_asks_rather_than_cycling():
+    stub = _CycleStub()
+    remote.Remote._cycle_radio(stub)
+    assert stub.cycle_pending is True
+    assert stub._fails_since_ok == 0
+    assert any("needs a cycle" in line for line in stub.logs)
+
+
+def test_take_cycle_request_is_taken_exactly_once():
+    stub = _CycleStub()
+    assert remote.Remote.take_cycle_request(stub) is False
+    remote.Remote._cycle_radio(stub)
+    assert remote.Remote.take_cycle_request(stub) is True
+    assert remote.Remote.take_cycle_request(stub) is False

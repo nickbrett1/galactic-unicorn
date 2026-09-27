@@ -437,6 +437,19 @@ def main():
         # wedged anything else on this thread - hard-resets the board into
         # boot.py's recovery instead of leaving a frozen panel on the wall.
         watchdog.feed()
+        # A radio cycle the poller asked for is performed HERE, at the top of
+        # the loop, never from inside poll_if_due: the poll runs immediately
+        # before engine.tick(), and a CYW43 teardown while the matrix's PIO/DMA
+        # is mid-frame was measured to do nothing at all (the association never
+        # dropped and the radio stayed deaf). At the top of the loop the last
+        # frame has finished writing, so the cycle meets an idle display. It is
+        # bounded and feeds the fuse throughout, like everything else here.
+        # Guarded with getattr, like the updater call below: an older lib/remote.py
+        # without the deferred-cycle seam must not raise inside the loop.
+        if remote is not None:
+            take_cycle = getattr(remote, "take_cycle_request", None)
+            if take_cycle is not None and take_cycle():
+                remote.cycle_radio()
         # One cheap look at the radio per second, written down where it survives
         # the session. This is the instrument for the one thing we still cannot
         # see from the outside: whether a DHCP failure leaves the board UP

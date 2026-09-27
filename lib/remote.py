@@ -374,6 +374,9 @@ class Remote:
         # (see should_cycle_radio and net.radio_reset).
         self.radio_reset_after = int(getattr(config, "RADIO_RESET_AFTER", 3))
         self._fails_since_ok = 0
+        # A cycle the poller has ASKED for but not performed: the render loop
+        # owns the doing (see _cycle_radio and main.py).
+        self.cycle_pending = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -462,19 +465,44 @@ class Remote:
             self._cycle_radio()
 
     def _cycle_radio(self):
+        """Ask for a radio cycle. The render loop performs it, not the poll.
+
+        net.radio_reset tears the CYW43 driver down and brings it back up. This
+        runs immediately before engine.tick(), i.e. possibly while the matrix's
+        PIO/DMA is still writing a frame - and a teardown during pixel streaming
+        was measured to do nothing at all (isconnected() never went False, the
+        radio stayed deaf). So the poll only raises the request; main.py calls
+        take_cycle_request() at the top of a frame, where the display is idle,
+        and runs cycle_radio() there.
+        """
         self._fails_since_ok = 0
+        self.cycle_pending = True
         self._net_log(
             str(self.radio_reset_after)
-            + " polls failed with the link up - cycling the radio"
+            + " polls failed with the link up - the radio needs a cycle"
         )
+
+    def take_cycle_request(self):
+        """True once per pending request: the render loop's cue to cycle."""
+        if not self.cycle_pending:
+            return False
+        self.cycle_pending = False
+        return True
+
+    def cycle_radio(self):
+        """Perform a deferred cycle. Called by the render loop, never by poll."""
         try:
             import net
 
-            rejoined = net.radio_reset(self.config, log=self._net_log, feed=self._feed)
-        except Exception as exc:  # noqa: BLE001 - recovery must not kill the poll
+            recovered = net.radio_reset(self.config, log=self._net_log, feed=self._feed)
+        except Exception as exc:  # noqa: BLE001 - recovery must not kill the loop
             self._log_failure(exc, "radio cycle", None)
-            return
-        self._net_log("radio cycle rejoined" if rejoined else "radio cycle did not rejoin")
+            return False
+        self._net_log(
+            "radio cycle recovered the radio" if recovered
+            else "radio cycle did not recover the radio"
+        )
+        return recovered
 
     def _schedule(self, now, ms):
         self.next_poll_at = time.ticks_add(now, ms)

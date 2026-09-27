@@ -124,6 +124,14 @@ NTP_RETRY_MS = 1000
 # enough that a remote Cancel still lands during a countdown. 0 disables it.
 RADIO_RESET_AFTER = 3
 
+# The cycle's own budget, and its proof. The interface is given RADIO_DOWN_MS
+# to actually report itself down before the cycle is called a no-op, and the
+# confirming TCP round trip - the only evidence the wedge cannot fake - is
+# given RADIO_PROBE_MS. Both stay well inside the 8 s watchdog fuse.
+RADIO_SETTLE_MS = 1000
+RADIO_DOWN_MS = 3000
+RADIO_PROBE_MS = 2000
+
 # Offset applied to UTC for the clock display. There is no timezone database on
 # the board, so this is a fixed offset and must be changed by hand at the DST
 # switch: Eastern is UTC-4 (EDT, summer) / UTC-5 (EST, winter).

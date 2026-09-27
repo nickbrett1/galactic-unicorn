@@ -100,11 +100,15 @@ try:
     import updater
 
     updater.run()
-# BaseException, not Exception: a Ctrl-C from an attached mpremote (or a
-# brown-out) raises KeyboardInterrupt, which Exception does NOT catch - and an
-# interrupt during the updater's network phase would then abort the whole boot
-# and main.py would never run. That is rule 1 above being broken by the one
-# thing most likely to happen while someone is standing over the board.
+# Two handlers, and they say different things. This one is SUCCESS:
+# updater._reset() raises SystemExit to ask for the reboot that starts the
+# firmware it just applied. The other, at the foot of the block, catches the
+# rest - and it is BaseException, not Exception, because a Ctrl-C from an
+# attached mpremote (or a brown-out) raises KeyboardInterrupt, which Exception
+# does NOT catch, and an interrupt during the updater's network phase would
+# abort the whole boot and main.py would never run. That is rule 1 above being
+# broken by the one thing most likely to happen while someone is standing over
+# the board.
 except SystemExit:
     # Not a failure: updater._reset() raises SystemExit to ask for the reboot
     # that starts the firmware it just applied. Reporting it as a skipped

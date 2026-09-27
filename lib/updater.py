@@ -98,6 +98,13 @@ WIFI_ATTEMPTS = 3
 # all.
 BOOT_WIFI_ATTEMPTS = 1
 LOG_FILE = "update.log"
+# update.log is appended to for the life of the board and was never rotated:
+# measured 2026-09-27 it had reached 112 KB on a filesystem with only ~360 KB
+# free, i.e. a third of the budget spent on history - and the update then
+# failed with OSError(28), ENOSPC. Past this size the file starts over, the
+# same bargain lib/remote.py:LOG_LIMIT takes: losing old lines beats an
+# unbounded file on a small flash.
+LOG_LIMIT = 16384
 MANIFEST_LIMIT = 16384
 # Hard ceiling on the pack body, so a wrong or hostile server cannot stream the
 # board into a full flash. The real pack is ~140 KB; 512 KB is generous margin.
@@ -120,6 +127,12 @@ def _log(message, exc=None):
     line = message if exc is None else message + ": " + repr(exc)
     print("update:", line)
     try:
+        try:
+            size = os.stat(LOG_FILE)[6]
+        except OSError:
+            size = 0
+        if size > LOG_LIMIT:
+            os.remove(LOG_FILE)
         with open(LOG_FILE, "a") as fh:
             fh.write(line + "\n")
     except Exception:  # noqa: BLE001, S110 - logging must never be fatal
@@ -479,6 +492,14 @@ def _update(config):
         base + "/" + pack["file"], PACK_PATH, pack["sha256"], timeout_s
     )
     written = _unpack(manifest["files"])
+    # The pack has done its job. Every file it carried is verified into :next/
+    # and nothing below reads it again, so drop it BEFORE the rollback copy is
+    # taken. That point is the peak of the update's flash use: :prev, :next and
+    # the pack are all resident at once, and on 2026-09-27 the update failed
+    # there with OSError(28,), ENOSPC - the pack is a third of the peak and is
+    # the one part that is re-downloadable. :next is the only staged copy the
+    # apply needs (and _cleanup still sweeps both).
+    _clear(PACK_PATH)
     # Only now - new pack downloaded, every file verified in :next/ - spend the
     # flash on a rollback copy of the tree we are about to replace.
     _archive_current(current or UNKNOWN_VERSION, [e["path"] for e in manifest["files"]])

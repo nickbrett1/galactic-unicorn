@@ -98,6 +98,13 @@ WIFI_ATTEMPTS = 3
 # all.
 BOOT_WIFI_ATTEMPTS = 1
 LOG_FILE = "update.log"
+# update.log is appended to for the life of the board and was never rotated:
+# measured 2026-09-27 it had reached 112 KB on a filesystem with only ~360 KB
+# free, i.e. a third of the budget spent on history - and the update then
+# failed with OSError(28), ENOSPC. Past this size the file starts over, the
+# same bargain lib/remote.py:LOG_LIMIT takes: losing old lines beats an
+# unbounded file on a small flash.
+LOG_LIMIT = 16384
 MANIFEST_LIMIT = 16384
 # Hard ceiling on the pack body, so a wrong or hostile server cannot stream the
 # board into a full flash. The real pack is ~140 KB; 512 KB is generous margin.
@@ -120,6 +127,12 @@ def _log(message, exc=None):
     line = message if exc is None else message + ": " + repr(exc)
     print("update:", line)
     try:
+        try:
+            size = os.stat(LOG_FILE)[6]
+        except OSError:
+            size = 0
+        if size > LOG_LIMIT:
+            os.remove(LOG_FILE)
         with open(LOG_FILE, "a") as fh:
             fh.write(line + "\n")
     except Exception:  # noqa: BLE001, S110 - logging must never be fatal
@@ -445,6 +458,13 @@ def _recover():
     if _read(BOOT_OK_FILE) == version:
         if _read(BOOT_TRY_FILE):  # proven: stop calling it a pending attempt
             _clear(BOOT_TRY_FILE)
+        # The release has come up, so the rollback copy has served its purpose
+        # and a fresh one is taken before the next apply. Left resident it is a
+        # permanent ~170 KB leak on this board's 768 KB filesystem - measured
+        # 2026-09-27, and enough on its own to make every later update fail
+        # with OSError(28,), ENOSPC.
+        _clear(PREV_INFO)
+        _rmtree(PREV_DIR)
         return False
     if not _has_rollback():
         return False
@@ -463,6 +483,13 @@ def _recover():
 def _update(config):
     base = config.UPDATE_MANIFEST_URL.rsplit("/", 1)[0]
     timeout_s = getattr(config, "UPDATE_TIMEOUT_S", 3)
+    # Sweep staging before spending flash on this attempt. A previous attempt
+    # that failed, or a rollback that did not finish, can leave the pack and
+    # :next/ resident; both are re-derivable and both are pure cost until the
+    # next run. On this board's 768 KB filesystem a single leftover pack is
+    # enough to turn one ENOSPC into a permanent failure loop - measured
+    # 2026-09-27: free fell to 236 KB and every update then failed OSError(28).
+    _cleanup()
     manifest = json.loads(_fetch(config.UPDATE_MANIFEST_URL, timeout_s))
     version = manifest["version"]
     current = _local_version()
@@ -479,6 +506,14 @@ def _update(config):
         base + "/" + pack["file"], PACK_PATH, pack["sha256"], timeout_s
     )
     written = _unpack(manifest["files"])
+    # The pack has done its job. Every file it carried is verified into :next/
+    # and nothing below reads it again, so drop it BEFORE the rollback copy is
+    # taken. That point is the peak of the update's flash use: :prev, :next and
+    # the pack are all resident at once, and on 2026-09-27 the update failed
+    # there with OSError(28,), ENOSPC - the pack is a third of the peak and is
+    # the one part that is re-downloadable. :next is the only staged copy the
+    # apply needs (and _cleanup still sweeps both).
+    _clear(PACK_PATH)
     # Only now - new pack downloaded, every file verified in :next/ - spend the
     # flash on a rollback copy of the tree we are about to replace.
     _archive_current(current or UNKNOWN_VERSION, [e["path"] for e in manifest["files"]])
@@ -538,6 +573,10 @@ def check_for_update(config):
         applied = _update(config)
     except Exception as exc:  # noqa: BLE001 - an update must not stop the display
         _log("update check failed, keeping current firmware", exc)
+        try:
+            _cleanup()
+        except Exception:  # noqa: BLE001, S110 - staging is a cost, not correctness
+            pass
         return False
     if applied:
         _reset()

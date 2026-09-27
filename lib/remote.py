@@ -575,7 +575,16 @@ class Remote:
 
         code, body = split_response(raw)
         if code != 200:
-            raise OSError("http " + str(code))
+            # Name what the service rejected. The body is tiny JSON that says
+            # which parameter was bad, and this line is logged AND file-logged on
+            # every failure - but it is bound to 80 bytes, because a 4xx from
+            # anywhere else could be something else entirely.
+            detail = body[:80]
+            try:
+                detail = detail.decode()
+            except Exception:  # noqa: BLE001 - undecodable bytes are still worth showing
+                detail = repr(detail)
+            raise OSError("http " + str(code) + ": " + detail)
         desired = json.loads(body.decode())
 
         self._apply(desired, report, now)
@@ -592,6 +601,13 @@ class Remote:
             routine_id = self.engine.routine_id()
             remaining_s = self.engine.remaining_s(now)
         uptime_s = time.ticks_diff(now, self._started) // 1000
+        if uptime_s < 0:
+            # The first poll can see `now` captured before this Remote was
+            # constructed (which set _started), so the diff is a few ms
+            # negative and floor-division makes it -1. The service rightly
+            # rejects a negative uptime_s (observed 2026-09-27: the first poll
+            # of every boot got OSError(http 422, detail=uptime_s)). Clamp it.
+            uptime_s = 0
         return reconcile.build_report(
             self.report,
             self.boot,

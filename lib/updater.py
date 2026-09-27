@@ -112,14 +112,23 @@ MAX_PACK_BYTES = 512 * 1024
 
 # --- rollback slot ---------------------------------------------------------
 # What each file means. All are tiny and all are device-written.
-#   version.txt   the release that is running now (written LAST by an apply)
-#   boot-ok.txt   the release that has PROVEN it comes up (written by main.py)
-#   boot-try.txt  the release that has had its one chance at booting
-#   prev.json     what the rollback copy is: {version, files, managed}
+#   version.txt     the release that is running now (written LAST by an apply)
+#   boot-ok.txt     the release that has PROVEN it comes up (written by main.py)
+#   boot-try.txt    the release whose boot chances are being spent right now
+#   boot-fails.txt  how many judged boots that release has spent, still unproven
+#   prev.json       what the rollback copy is: {version, files, managed}
+#
+# A release is NOT discarded on one bad boot. It gets BOOT_FAILS_MAX boots that
+# end without a boot-ok before it is rolled back. One was too few: on
+# 2026-09-27 a single flaky first boot - a low-heap MemoryError, a radio wedge
+# that stalled the loop past the soak, or a reset inside the window - rolled
+# back a release that was perfectly good, twice.
 PREV_DIR = ":prev"
 PREV_INFO = "prev.json"
 BOOT_OK_FILE = "boot-ok.txt"
 BOOT_TRY_FILE = "boot-try.txt"
+BOOT_FAILS_FILE = "boot-fails.txt"
+BOOT_FAILS_MAX = 3
 UNKNOWN_VERSION = "dev"
 
 
@@ -168,6 +177,14 @@ def _clear(name):
         os.remove(name)
     except OSError:
         pass
+
+
+def _read_fails():
+    """How many judged boots the pending release has spent. Absent or junk = 0."""
+    try:
+        return int(_read(BOOT_FAILS_FILE) or 0)
+    except ValueError:
+        return 0
 
 
 def _local_version():
@@ -431,6 +448,7 @@ def _rollback():
         os.rename(dest, entry["path"])
     _write(VERSION_FILE, info["version"] or UNKNOWN_VERSION)
     _clear(BOOT_TRY_FILE)
+    _clear(BOOT_FAILS_FILE)
     _clear(PREV_INFO)
     _rmtree(PREV_DIR)
     return info["version"]
@@ -440,12 +458,15 @@ def _recover():
     """Decide whether the running release deserves to stay. Offline.
 
     Returns True if the previous tree was restored. Three states, judged from
-    two small files:
+    small files:
 
-      boot-ok == version   it has come up before; nothing to do
-      boot-try != version  this is its FIRST boot - give it the one chance
-      boot-try == version  it has had that chance and still has not reported
-                           in, so it never came up: put the previous tree back
+      boot-ok == version        it has come up before; nothing to do
+      boot-try != version       not yet judged: this boot is its first chance
+      boot-try == version       it has been judged before and still has not
+                                reported in. It gets BOOT_FAILS_MAX boots like
+                                that; only the boot AFTER the last one rolls it
+                                back, so one flaky boot does not discard a
+                                release that would have come up on the next.
 
     The whole thing is gated on a rollback copy existing. That is not just an
     optimisation: it also means the protocol only engages for trees this
@@ -456,25 +477,29 @@ def _recover():
     if not version:
         return False  # not OTA-managed at all yet
     if _read(BOOT_OK_FILE) == version:
-        if _read(BOOT_TRY_FILE):  # proven: stop calling it a pending attempt
-            _clear(BOOT_TRY_FILE)
-        # The release has come up, so the rollback copy has served its purpose
-        # and a fresh one is taken before the next apply. Left resident it is a
-        # permanent ~170 KB leak on this board's 768 KB filesystem - measured
-        # 2026-09-27, and enough on its own to make every later update fail
-        # with OSError(28,), ENOSPC.
+        # Proven: retire the attempt and counter, and drop the rollback slot
+        # (a fresh copy is taken before the next apply). Left resident the slot
+        # is a permanent ~170 KB leak on this board's 768 KB filesystem -
+        # measured 2026-09-27, and enough on its own to make every later update
+        # fail with OSError(28,), ENOSPC.
+        _clear(BOOT_TRY_FILE)
+        _clear(BOOT_FAILS_FILE)
         _clear(PREV_INFO)
         _rmtree(PREV_DIR)
         return False
     if not _has_rollback():
         return False
     if _read(BOOT_TRY_FILE) != version:
-        return False  # has not had its chance yet
+        return False  # this release's first boot: judgement is not due yet
+    if _read_fails() < BOOT_FAILS_MAX:
+        return False  # it still has boots left to prove itself
     previous = _rollback()
     _log(
         "rolled back from "
         + version
-        + " (it never came up) to "
+        + " (it did not come up in "
+        + str(BOOT_FAILS_MAX)
+        + " boots) to "
         + (previous or UNKNOWN_VERSION)
     )
     return True
@@ -531,21 +556,32 @@ def _update(config):
 
 
 def _mark_attempt():
-    """Record that the running release has had its one chance at coming up.
+    """Record that the running release has just spent one boot unproven.
 
     Written at the very END of boot.py's work - once the update phase is over
     and main.py is about to run - and never earlier. That ordering is
     load-bearing: when this was written at the START of the boot, an interrupt
     during the updater's network phase (which is most of boot.py's runtime, and
-    is exactly where an attached mpremote sends Ctrl-C) consumed the chance
+    is exactly where an attached mpremote sends Ctrl-C) consumed a boot
     without main.py ever being reached, and the next boot rolled a perfectly
     good release back. Measured, on the board, v0.1.7 -> v0.1.6.
+
+    The boot is COUNTED, not spent all at once: _recover only rolls back once
+    this counter has reached BOOT_FAILS_MAX, so a release that fails to prove
+    itself on one boot still has the next ones to try.
     """
     version = _read(VERSION_FILE)
     if not version or not _has_rollback():
         return  # protocol not engaged: never judge a tree we cannot put back
-    if _read(BOOT_OK_FILE) != version:
+    if _read(BOOT_OK_FILE) == version:
+        return  # already proven this boot; nothing to count
+    fails = _read_fails()
+    if _read(BOOT_TRY_FILE) != version:
+        # First boot of this release: start its counter from zero rather than
+        # inheriting whatever an earlier release left behind.
         _write(BOOT_TRY_FILE, version)
+        fails = 0
+    _write(BOOT_FAILS_FILE, str(fails + 1))
 
 
 def check_for_update(config):

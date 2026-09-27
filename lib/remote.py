@@ -575,7 +575,16 @@ class Remote:
 
         code, body = split_response(raw)
         if code != 200:
-            raise OSError("http " + str(code))
+            # Name what the service rejected. The body is tiny JSON that says
+            # which parameter was bad, and this line is logged AND file-logged on
+            # every failure - but it is bound to 80 bytes, because a 4xx from
+            # anywhere else could be something else entirely.
+            detail = body[:80]
+            try:
+                detail = detail.decode()
+            except Exception:  # noqa: BLE001 - undecodable bytes are still worth showing
+                detail = repr(detail)
+            raise OSError("http " + str(code) + ": " + detail)
         desired = json.loads(body.decode())
 
         self._apply(desired, report, now)

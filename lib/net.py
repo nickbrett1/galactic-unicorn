@@ -369,3 +369,88 @@ def join_wifi(config, attempts=3, attempt_ms=10000, log=None, feed=None):
             return True
         _log_with(log, "wifi attempt " + str(attempt) + "/" + str(attempts) + " got no IP")
     return False
+
+
+# --- cycling the radio itself -----------------------------------------------
+#
+# Everything above this line treats the interface as a thing that is either up
+# or down. It is not: it can also be UP AND DEAF, and that is the state that
+# made the remote poller useless on this board.
+#
+# Measured 2026-09-27. `wlan.isconnected()` returns True, `wlan.status()` is 3,
+# `wlan.ifconfig()` hands back a valid lease (192.168.1.63), `rssi` reads a
+# healthy -39 dBm - and every socket call dies with OSError(110) (ETIMEDOUT) at
+# exactly its own timeout, while the board stops answering ICMP from the LAN
+# entirely (0/24 pings, against 10/10 to the NAS from the same machine). The
+# board's own update.log and remote.log alternate
+# "no update: 0.1.29 is already running" with
+# "update failed, keeping current firmware: OSError(110,)" - so this is not a
+# remote-poller bug, it is the radio.
+#
+# What clears it, and what does not, both matter:
+#
+#   * `wlan.active(False); wlan.active(True)` clears it. Measured: 10/10 polls
+#     OK immediately after, then 180 s at a 3 s cadence with 3 isolated
+#     failures and no wedge - i.e. the radio comes back and STAYS back.
+#   * a soft reset does NOT clear it.
+#   * `machine.reset()` does NOT clear it either, which is the surprising one.
+#     The CYW43 is a separate chip with its own supply, so neither of the
+#     RP2040's resets powers it down; only a real power cycle does.
+#
+# That last fact is why this lives in firmware rather than in a procedure. Every
+# board-side "fix" a human can reach over USB - mpremote's reset, Ctrl-D - is a
+# reset of the wrong chip, so a wedged board stays wedged on the wall until
+# somebody unplugs it. A cycle the app can do itself is the only recovery that
+# does not need a person.
+#
+# The sleep between off and on is not decoration: `active(True)` immediately
+# after `active(False)` can return before the driver has finished tearing the
+# association down, and the rejoin then fails.
+
+RADIO_SETTLE_MS = 1000
+RADIO_JOIN_MS = 15000
+
+
+def radio_reset(config, log=None, feed=None):
+    """Power-cycle the radio in software, then rejoin. True once it has an IP.
+
+    Not a `join_wifi` retry: joining assumes the interface works and the
+    association is what failed. This assumes the opposite - the interface
+    reports itself healthy and is not - so it takes the interface down
+    entirely and brings the driver back up before joining. Every step is
+    bounded and feeds the fuse, so it is safe to call from the render loop.
+    """
+    if not getattr(config, "WIFI_SSID", None):
+        return False
+    import network
+
+    wlan = network.WLAN(network.STA_IF)
+    try:
+        was = "connected=" + str(wlan.isconnected()) + " status=" + str(wlan.status())
+    except Exception:  # noqa: BLE001 - the log must not be what fails
+        was = ""
+    _log_with(log, "radio: cycling the interface" + (" (" + was + ")" if was else ""))
+    try:
+        wlan.active(False)
+    except Exception as exc:  # noqa: BLE001 - report it, do not raise into the loop
+        _log_with(log, "radio: could not take the interface down", exc)
+        return False
+    wdt_sleep(RADIO_SETTLE_MS, feed)
+    try:
+        wlan.active(True)
+    except Exception as exc:  # noqa: BLE001
+        _log_with(log, "radio: could not bring the interface back up", exc)
+        return False
+    # Static IP first, exactly as join_wifi does it and for the same reason: a
+    # soft reset leaves the radio associated while lwip has no address, so the
+    # address has to be re-applied before anything resolves.
+    apply_static_ip(wlan, config, log)
+    try:
+        wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
+    except OSError as exc:
+        _log_with(log, "radio: connect raised", exc)
+    if wait_for_ip(wlan, getattr(config, "RADIO_JOIN_MS", RADIO_JOIN_MS), feed):
+        _log_with(log, "radio: back up")
+        return True
+    _log_with(log, "radio: did not get an IP back")
+    return False

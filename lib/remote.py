@@ -141,6 +141,19 @@ def poll_path(report, token):
     return "/device/poll?" + "&".join(parts)
 
 
+def should_cycle_radio(consecutive_link_failures, threshold):
+    """True when a run of link-up failures has earned a radio cycle.
+
+    Pure, so the policy is pinned on the host (tests/test_remote.py) while the
+    act it authorises is not. A threshold of 0 disables the recovery rather
+    than firing it immediately: "off" has to be expressible, and 0 is how the
+    rest of config spells it.
+    """
+    if not threshold or threshold <= 0:
+        return False
+    return consecutive_link_failures >= threshold
+
+
 def classify_failure(exc, free, link):
     """Which window was this: the heap or the link? (memo sections 6.2, 11.15).
 
@@ -357,6 +370,10 @@ class Remote:
         # write a line every second. Re-armed when the link comes back.
         self._link_warned = False
         self._disabled_reason = self._disabled()
+        # How many polls have failed in a row while the radio claimed to be up
+        # (see should_cycle_radio and net.radio_reset).
+        self.radio_reset_after = int(getattr(config, "RADIO_RESET_AFTER", 3))
+        self._fails_since_ok = 0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -418,9 +435,46 @@ class Remote:
             return
         try:
             self._poll(now)
+            self._fails_since_ok = 0
         except Exception as exc:  # noqa: BLE001 - a poll must not kill the loop
             self._log_failure(exc, "poll", now)
+            self._note_failure()
             self._schedule(now, self.floor_ms)
+
+    def _note_failure(self):
+        """Count it, and cycle the radio once the run is long enough.
+
+        Only failures with the link UP count. A link that is honestly down is
+        `join_wifi`'s problem and it already retries; the state this exists for
+        is the one where nothing looks wrong and nothing gets through
+        (lib/net.py:radio_reset).
+        """
+        wlan = self._radio()
+        try:
+            link = wlan is not None and wlan.isconnected()
+        except Exception:  # noqa: BLE001 - an unreadable radio is not an up one
+            link = False
+        if not link:
+            self._fails_since_ok = 0
+            return
+        self._fails_since_ok += 1
+        if should_cycle_radio(self._fails_since_ok, self.radio_reset_after):
+            self._cycle_radio()
+
+    def _cycle_radio(self):
+        self._fails_since_ok = 0
+        self._net_log(
+            str(self.radio_reset_after)
+            + " polls failed with the link up - cycling the radio"
+        )
+        try:
+            import net
+
+            rejoined = net.radio_reset(self.config, log=self._net_log, feed=self._feed)
+        except Exception as exc:  # noqa: BLE001 - recovery must not kill the poll
+            self._log_failure(exc, "radio cycle", None)
+            return
+        self._net_log("radio cycle rejoined" if rejoined else "radio cycle did not rejoin")
 
     def _schedule(self, now, ms):
         self.next_poll_at = time.ticks_add(now, ms)

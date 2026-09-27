@@ -122,3 +122,27 @@ def test_classify_failure_link_forms():
 
 def test_classify_failure_other():
     assert remote.classify_failure(ValueError("bad json"), 40000, True) == "other"
+
+
+# -- cycling the radio out of a wedge (should_cycle_radio) --------------------
+#
+# The wedge this policy is for, measured 2026-09-27 on this board: the radio
+# reports connected=True, status=3, a valid lease and rssi -39, and every
+# socket call still dies with OSError(110) - the board does not answer ICMP
+# either. `wlan.active(False)`/`active(True)` clears it; neither a soft reset
+# nor `machine.reset()` does (the CYW43 has its own supply), so the app has to
+# do it. Only the DECISION is pinned here - the cycle needs a board.
+
+def test_should_cycle_radio_only_at_the_threshold():
+    assert remote.should_cycle_radio(1, 3) is False
+    assert remote.should_cycle_radio(2, 3) is False
+    assert remote.should_cycle_radio(3, 3) is True
+    assert remote.should_cycle_radio(9, 3) is True
+
+
+def test_should_cycle_radio_zero_threshold_disables_recovery():
+    # 0 means "never", not "immediately": the disabling case must not be the
+    # most aggressive one.
+    assert remote.should_cycle_radio(0, 0) is False
+    assert remote.should_cycle_radio(5, 0) is False
+    assert remote.should_cycle_radio(5, None) is False

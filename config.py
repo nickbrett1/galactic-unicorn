@@ -111,6 +111,19 @@ NTP_TIMEOUT_S = 2
 NTP_ATTEMPTS = 3
 NTP_RETRY_MS = 1000
 
+# How many polls in a row may fail while the radio still claims to be UP before
+# the remote poller cycles the interface itself (lib/remote.py:_note_failure,
+# lib/net.py:radio_reset).
+#
+# The state this exists for is the CYW43 going deaf: isconnected() True,
+# status 3, a valid lease, a healthy rssi - and every socket call dead with
+# OSError(110), the board not even answering ICMP (measured 2026-09-27; see
+# net.radio_reset for what clears it and why neither kind of reset does).
+#
+# 3 at the 1 s poll floor is a cycle a few seconds into a wedge, which is early
+# enough that a remote Cancel still lands during a countdown. 0 disables it.
+RADIO_RESET_AFTER = 3
+
 # Offset applied to UTC for the clock display. There is no timezone database on
 # the board, so this is a fixed offset and must be changed by hand at the DST
 # switch: Eastern is UTC-4 (EDT, summer) / UTC-5 (EST, winter).

@@ -412,11 +412,20 @@ class Remote:
         return self.engine.state in (STATE_COUNTDOWN, STATE_HANDOFF)
 
     def _net_log(self, message, exc=None):
-        """net.join_wifi's log hook, folded into this module's log line."""
-        if exc is None:
-            self.log("remote: " + str(message))
-        else:
-            self.log("remote: " + str(message) + ": " + repr(exc))
+        """net.join_wifi's log hook, folded into this module's log line.
+
+        Written to remote.log as well as the REPL. The cycle's evidence -
+        "interface is down", "back up and answering", "did not take effect" -
+        is the whole point of the recovery, and until this change it went to
+        the REPL only: a hard reset (or the next USB attach) took it with it,
+        so a recovery could not be told from a board that merely rebooted.
+        remote.log survives a reset, so the proof does too.
+        """
+        line = "remote: " + str(message)
+        if exc is not None:
+            line = line + ": " + repr(exc)
+        self.log(line)
+        _file_log(self.log_file, line)
 
     def _radio(self):
         if self._wlan is None:

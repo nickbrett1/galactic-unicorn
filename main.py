@@ -334,6 +334,15 @@ def _run_update_check(check, config):
     The deferral gate that keeps the check out of a running countdown is
     unchanged, and it is still the thing that protects a child's timer.
     """
+    # Collect first. Measured 2026-09-27: the IN-LOOP check failed with
+    # MemoryError('memory allocation failed, allocating 3840 bytes') while
+    # gc.mem_free() read 93488. The loop's heap is fragmented by the live
+    # display, engine and remote, and the manifest fetch/parse wants one
+    # contiguous block the free list cannot supply. The SAME check at boot
+    # (boot.py, fresh heap) fetched the same 2.2 KB manifest without trouble,
+    # and _attach_remote already collects for exactly this reason. One collect
+    # before the fetch consolidates the free list while the loop is idle here.
+    gc.collect()
     check(config)
 
 

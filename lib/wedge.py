@@ -67,8 +67,7 @@ class Journal:
             if cause in self.counts:
                 self.counts[cause] += 1
             self._run += 1
-            if self._run > self.peak_run:
-                self.peak_run = self._run
+            self.peak_run = max(self.peak_run, self._run)
             self._header()
             self._write(
                 "poll fail cause="
@@ -88,7 +87,7 @@ class Journal:
                 + " run="
                 + str(self._run)
             )
-        except Exception:  # noqa: BLE001 - recording must never raise
+        except Exception:  # noqa: BLE001, S110 - recording must never raise
             pass
 
     def note_cycle(self, recovered):
@@ -108,17 +107,16 @@ class Journal:
                 + " recovered="
                 + str(bool(recovered))
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def note_recovery(self, run):
         """The poll answered again after `run` consecutive failures."""
         try:
             self._write("poll recovered after " + str(run) + " consecutive failures")
-            if run > self.peak_run:
-                self.peak_run = run
+            self.peak_run = max(self.peak_run, run)
             self._run = 0
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def summary(self):

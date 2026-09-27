@@ -601,6 +601,13 @@ class Remote:
             routine_id = self.engine.routine_id()
             remaining_s = self.engine.remaining_s(now)
         uptime_s = time.ticks_diff(now, self._started) // 1000
+        if uptime_s < 0:
+            # The first poll can see `now` captured before this Remote was
+            # constructed (which set _started), so the diff is a few ms
+            # negative and floor-division makes it -1. The service rightly
+            # rejects a negative uptime_s (observed 2026-09-27: the first poll
+            # of every boot got OSError(http 422, detail=uptime_s)). Clamp it.
+            uptime_s = 0
         return reconcile.build_report(
             self.report,
             self.boot,

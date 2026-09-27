@@ -205,7 +205,7 @@ def mark_boot_ok(log):
     proves the app started; it does not prove the app stays started, and the
     difference is a release that builds its display, draws a frame and then
     wedges in the render loop. Writing this at the banner retired the release's
-    one chance before the loop had proved anything, so a release that wedged
+    chance before the loop had proved anything, so a release that wedged
     every boot was judged healthy on the next boot and reset forever. The
     watchdog alone cannot fix that: it turns "wedged forever" into "reset-loop
     forever", which is not recovery. So the marker is delayed until the loop
@@ -214,9 +214,11 @@ def mark_boot_ok(log):
     Not written from a timer callback, and not from boot.py: main.py owns it,
     and the updater only ever reads it.
 
-    Losing the write is not worth failing over: the updater's one-chance rule
-    would roll a perfectly good release back on the next boot, which is a much
-    worse outcome than a stale marker, so a failure here is loud but survivable.
+    Losing the write is not worth failing over here: each boot that ends
+    without it spends one of the release's BOOT_FAILS_MAX chances, so a
+    one-off failure is absorbed and the display is never taken down for a
+    marker. Only a release that fails to write it on every boot up to the
+    limit is rolled back, which is the right outcome anyway.
     """
     try:
         with open("boot-ok.txt", "w") as fh:
@@ -518,10 +520,11 @@ def main():
         # without an IP, or RESETTING (see lib/wifihealth.py).
         if health is not None:
             health.sample()
-        # Retire the release's one chance only after the loop has demonstrably
+        # Retire the release's chance only after the loop has demonstrably
         # kept feeding the fuse. A release that wedges here never gets this far,
-        # so boot-ok.txt stays behind and boot.py rolls it back on the next
-        # boot. Done once, from the normal path, so it is a fact about the loop
+        # so boot-ok.txt stays behind and boot.py counts the boot against it -
+        # rolling it back only once BOOT_FAILS_MAX such boots have passed.
+        # Done once, from the normal path, so it is a fact about the loop
         # rather than a timer that fired hopefully.
         if not boot_ok_written and time.ticks_diff(now, loop_started) >= BOOT_OK_SOAK_MS:
             boot_ok_written = True

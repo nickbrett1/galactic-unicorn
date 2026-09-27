@@ -8,9 +8,9 @@ files out and calling the real _recover() covers it without a board. Boot
 sequencing - which is where the bugs have actually been - is exercised by
 driving the board, not here.
 
-`never came up` is now doing double duty, and deliberately so. Two different
-failures reach _recover() in the same shape, with boot-ok behind and boot-try
-spent:
+`did not come up in N boots` is doing double duty, and deliberately so. Two
+different failures reach _recover() in the same shape, with boot-ok behind and
+its boot chances spent:
 
   * a release that dies on the way up, before it can write boot-ok
   * a release that starts, draws its banner and then wedges, so the loop never
@@ -36,7 +36,9 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 import updater
 
 
-def lay_out_tree(tmp, boot_ok, boot_try, version="0.2.0", prev_version="0.1.10"):
+def lay_out_tree(
+    tmp, boot_ok, boot_try, version="0.2.0", prev_version="0.1.10", boot_fails=None
+):
     """A board-ish tree: a running release plus the rollback slot that judges it."""
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
@@ -49,6 +51,9 @@ def lay_out_tree(tmp, boot_ok, boot_try, version="0.2.0", prev_version="0.1.10")
     if boot_try is not None:
         with open(updater.BOOT_TRY_FILE, "w") as fh:
             fh.write(boot_try)
+    if boot_fails is not None:
+        with open(updater.BOOT_FAILS_FILE, "w") as fh:
+            fh.write(str(boot_fails))
 
     # The rollback copy, hashed exactly as the board would have written it -
     # _rollback verifies every hash before it moves anything.
@@ -80,10 +85,10 @@ def state(name):
         return None
 
 
-def case(name, boot_ok, boot_try, want_rollback, want_version):
+def case(name, boot_ok, boot_try, want_rollback, want_version, boot_fails=None):
     tmp = tempfile.mkdtemp()
     try:
-        lay_out_tree(tmp, boot_ok, boot_try)
+        lay_out_tree(tmp, boot_ok, boot_try, boot_fails=boot_fails)
         rolled_back = updater._recover()
         version = state(updater.VERSION_FILE)
         ok = rolled_back == want_rollback and version == want_version
@@ -136,12 +141,18 @@ def case_no_blacklist():
     """
     tmp = tempfile.mkdtemp()
     try:
-        lay_out_tree(tmp, "0.1.10", "0.2.0")
+        lay_out_tree(tmp, "0.1.10", "0.2.0", boot_fails=updater.BOOT_FAILS_MAX)
         updater._recover()
         leftovers = sorted(
             name
             for name in os.listdir(tmp)
-            if "bad" in name or name in (updater.BOOT_TRY_FILE, updater.PREV_INFO)
+            if "bad" in name
+            or name
+            in (
+                updater.BOOT_TRY_FILE,
+                updater.BOOT_FAILS_FILE,
+                updater.PREV_INFO,
+            )
         )
         ok = not leftovers and not hasattr(updater, "BAD_FILE")
         verdict = "PASS" if ok else "FAIL"
@@ -155,17 +166,96 @@ def case_no_blacklist():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_release_gets_several_boots():
+    """A release is not discarded until it has failed to prove itself MAX boots.
+
+    One chance was too few. On 2026-09-27 a single flaky first boot - a low-heap
+    MemoryError, a radio wedge that stalled the loop past the soak, a reset
+    inside the soak - rolled back a release that was fine, twice. The attempt
+    is now a COUNT: every boot that starts the release and does not write
+    boot-ok spends one, and only the boot AFTER the last one rolls it back.
+
+    Driven through the real pair boot.py uses (recover then mark_attempt) with
+    none of them writing boot-ok, so every boot is a failed one.
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        lay_out_tree(tmp, "0.1.10", None)
+        rolled_at = None
+        for boot in range(1, updater.BOOT_FAILS_MAX + 3):
+            if updater._recover():
+                rolled_at = boot
+                break
+            updater._mark_attempt()
+        want = updater.BOOT_FAILS_MAX + 1
+        ok = rolled_at == want
+        ok = ok and state(updater.VERSION_FILE) == "0.1.10"
+        ok = ok and not os.path.exists(updater.BOOT_FAILS_FILE)
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'release runs MAX failed boots, rolled back at MAX+1':<46} "
+            f"rolled_at={rolled_at} want={want}"
+        )
+        return ok
+    finally:
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_late_proof_keeps_release():
+    """A release proven on its last allowed boot is kept, not rolled back.
+
+    The counter must not make the protocol forget the successful case: a
+    release that soaks and writes boot-ok on its final chance is exactly as
+    proven as one that did it on the first, and _recover must retire its state
+    rather than judge it again.
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        lay_out_tree(tmp, "0.1.10", None)
+        for _ in range(updater.BOOT_FAILS_MAX - 1):
+            assert updater._recover() is False
+            updater._mark_attempt()
+        # main.py finally feeds the fuse long enough and writes the marker.
+        with open(updater.BOOT_OK_FILE, "w") as fh:
+            fh.write("0.2.0\n")
+        rolled = updater._recover()
+        ok = rolled is False and state(updater.VERSION_FILE) == "0.2.0"
+        ok = ok and not os.path.exists(updater.BOOT_FAILS_FILE)
+        ok = ok and not os.path.exists(updater.BOOT_TRY_FILE)
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'a late proof keeps the release':<46} "
+            f"rolled={rolled} version={state(updater.VERSION_FILE)}"
+        )
+        return ok
+    finally:
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     results = [
         # Proven before: nothing to do, and boot-try is retired.
         case("boot-ok matches -> keep", "0.2.0", "0.2.0", False, "0.2.0"),
-        # The one that matters: it had its chance and never reported in. Covers
-        # both a crash on the way up and a wedge in the loop.
-        case("spent chance, no boot-ok -> roll back", "0.1.10", "0.2.0", True, "0.1.10"),
-        # First boot of a release: its chance, and no judgement yet.
+        # The one that matters: every judged boot spent and never reported in.
+        # Covers both a crash on the way up and a wedge in the loop.
+        case(
+            "chances spent, no boot-ok -> roll back",
+            "0.1.10",
+            "0.2.0",
+            True,
+            "0.1.10",
+            boot_fails=updater.BOOT_FAILS_MAX,
+        ),
+        # ... but a release is not discarded until the chances actually run out.
+        case("one bad boot -> still kept", "0.1.10", "0.2.0", False, "0.2.0", boot_fails=1),
+        # First boot of a release: its first chance, and no judgement yet.
         case("first boot -> no judgement", "0.1.10", "0.1.10", False, "0.2.0"),
         case_proven_drops_slot(),
         case_no_blacklist(),
+        case_release_gets_several_boots(),
+        case_late_proof_keeps_release(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} passed")

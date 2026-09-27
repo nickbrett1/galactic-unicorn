@@ -164,6 +164,13 @@ def should_cycle_radio(consecutive_link_failures, threshold):
     return consecutive_link_failures >= threshold
 
 
+# Below this much free memory, an ENOMEM is taken to be a heap shortfall.
+# Above it, the heap has room and the refusal came from somewhere else. 32 KB
+# is comfortable against the board's ~90-100 KB idle free and the ~25 KB a TLS
+# handshake would want, so it separates "no room" from "room, but not here".
+HEAP_ENOMEM_FLOOR = 32 * 1024
+
+
 def classify_failure(exc, free, link):
     """Which window was this: the heap or the link? (memo sections 6.2, 11.15).
 
@@ -174,6 +181,15 @@ def classify_failure(exc, free, link):
     ENOMEM is read from `errno` OR from `args[0]`: CPython leaves `.errno`
     None for `OSError(12)` (it is in args), and the board's spelling has varied
     between MicroPython versions - so both are checked rather than one assumed.
+
+    ENOMEM does **not** always mean the heap, though, which is why `free` is a
+    parameter. The board's measured HTTPS failure (config.py, 2026-09-26)
+    raised OSError(12) with the heap demonstrably healthy - a 64 KB contiguous
+    block allocated fine - so the refusal was mbedTLS/lwIP, not the allocator,
+    and calling it "heap" sent the search into the wrong window. `free` is the
+    only evidence the line has, so it is used: ENOMEM with room to spare is not
+    a heap verdict, and falls through to the link/other checks. `free` is None
+    when gc.mem_free() itself raised, and then the old verdict stands.
     """
     if isinstance(exc, MemoryError):
         return "heap"
@@ -181,7 +197,7 @@ def classify_failure(exc, free, link):
         errno = getattr(exc, "errno", None)
         if errno is None and exc.args:
             errno = exc.args[0]
-        if errno == 12:
+        if errno == 12 and (free is None or free < HEAP_ENOMEM_FLOOR):
             return "heap"
     if link is False:
         return "link"

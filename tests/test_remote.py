@@ -120,6 +120,20 @@ def test_classify_failure_heap_forms():
     # A C-side allocation failure surfaces as ENOMEM, not MemoryError.
     assert remote.classify_failure(MemoryError("x"), 100, True) == "heap"
     assert remote.classify_failure(OSError(12), 100, True) == "heap"
+    # Unknown free keeps the old verdict rather than guessing.
+    assert remote.classify_failure(OSError(12), None, True) == "heap"
+
+
+def test_classify_failure_enomem_with_a_healthy_heap_is_not_the_heap():
+    # The measured HTTPS case (config.py, 2026-09-26): OSError(12) with a
+    # healthy heap. The refusal was mbedTLS/lwIP, so "heap" was the wrong window.
+    healthy = remote.HEAP_ENOMEM_FLOOR + 1000
+    assert remote.classify_failure(OSError(12), healthy, True) == "other"
+    # ...and with the link down, the link is the better answer, not "other".
+    assert remote.classify_failure(OSError(12), healthy, False) == "link"
+    # Exactly at the floor is still a shortfall: the bound is inclusive-low.
+    at_floor = remote.HEAP_ENOMEM_FLOOR - 1
+    assert remote.classify_failure(OSError(12), at_floor, True) == "heap"
 
 
 def test_classify_failure_link_forms():

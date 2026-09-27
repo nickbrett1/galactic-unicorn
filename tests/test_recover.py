@@ -103,6 +103,44 @@ def case(name, boot_ok, boot_try, want_rollback, want_version, boot_fails=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_proven_slot_dropped_in_session():
+    """A proven release's slot is dropped by the RUNNING app, not only at boot.
+
+    _recover drops it on the boot after boot-ok is written, and nothing else
+    did - so until the next reboot the ~167 KB slot sat there for the whole
+    session, which is exactly the flash the in-loop update needs. Measured on
+    the board 2026-09-27: free 424 KB clean, 44 KB with the slot resident.
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        lay_out_tree(tmp, "0.2.0", None)
+        updater._drop_proven_rollback()
+        gone = not os.path.exists(updater.PREV_DIR) and not os.path.exists(
+            updater.PREV_INFO
+        )
+        verdict = "PASS" if gone else "FAIL"
+        print(f"{verdict:<4} {'proven slot is dropped in-session too':<46} gone={gone}")
+        return gone
+    finally:
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_unproven_slot_is_kept_in_session():
+    """... but an unproven release must NOT lose the copy it may roll back to."""
+    tmp = tempfile.mkdtemp()
+    try:
+        lay_out_tree(tmp, "0.1.10", "0.2.0")  # boot-ok still names the previous
+        updater._drop_proven_rollback()
+        kept = os.path.exists(updater.PREV_DIR) and os.path.exists(updater.PREV_INFO)
+        verdict = "PASS" if kept else "FAIL"
+        print(f"{verdict:<4} {'unproven slot is kept in-session':<46} kept={kept}")
+        return kept
+    finally:
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_proven_drops_slot():
     """A proven release must not keep its rollback copy.
 
@@ -253,6 +291,8 @@ def main():
         # First boot of a release: its first chance, and no judgement yet.
         case("first boot -> no judgement", "0.1.10", "0.1.10", False, "0.2.0"),
         case_proven_drops_slot(),
+        case_proven_slot_dropped_in_session(),
+        case_unproven_slot_is_kept_in_session(),
         case_no_blacklist(),
         case_release_gets_several_boots(),
         case_late_proof_keeps_release(),

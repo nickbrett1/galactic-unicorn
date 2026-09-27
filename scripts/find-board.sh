@@ -9,6 +9,40 @@
 set -euo pipefail
 shopt -s nullglob
 
+# The container ships mpremote in the project venv, not on PATH. A bare
+# `mpremote` probe therefore exits 127 ("command not found"), which is
+# indistinguishable from "this node is not a REPL" and makes every board look
+# dead. Resolve the real binary first, preferring the venv next to this script.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MPREMOTE="$ROOT/.venv/bin/mpremote"
+[[ -x "$MPREMOTE" ]] || MPREMOTE="$(command -v mpremote || echo mpremote)"
+PYTHON="$ROOT/.venv/bin/python"
+[[ -x "$PYTHON" ]] || PYTHON="$(command -v python3 || echo python3)"
+
+# Fast, side-effect-free REPL probe. `mpremote connect <node> exec` spends its
+# WHOLE timeout (5 s) hanging on a node that is present but not a REPL - here,
+# the LG monitor's bridge - so a round costs 8 s and, being slow, keeps landing
+# in the gaps where the resetting board's node is momentarily absent. Instead:
+# open the CDC, poke it with Ctrl-C, and accept it only if the reply carries a
+# MicroPython prompt. Sub-second, so we can afford many more rounds.
+repl_answers() {
+  "$PYTHON" - "$1" <<'PY' 2>/dev/null
+import sys, time, serial
+try:
+    s = serial.Serial(sys.argv[1], 115200, timeout=0.4)
+except Exception:
+    sys.exit(1)
+try:
+    s.write(b'\r\x03\x03'); time.sleep(0.4); d = s.read(400)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+d = d or b''
+sys.exit(0 if (b'>>>' in d or b'MicroPython' in d) else 1)
+PY
+}
+
 candidates=()
 for node in /dev/tty.usbmodem* /dev/tty.usbserial*; do
   [[ -c "$node" && -r "$node" ]] && candidates+=("$node")
@@ -30,7 +64,7 @@ fi
 # there yet" - and the fallback below then hands back whatever node IS present,
 # which in this devcontainer is the LG monitor's USB serial. Re-scan and re-probe
 # until a board answers, or until we have waited longer than a reset can last.
-ATTEMPTS=6
+ATTEMPTS=10
 for ((round = 1; round <= ATTEMPTS; round++)); do
   # Reset per round: a port that answered in round 1 and again in round 2 would
   # otherwise be counted twice and read as "several ports answered".
@@ -41,7 +75,7 @@ for ((round = 1; round <= ATTEMPTS; round++)); do
   done
 
   for node in "${candidates[@]}"; do
-    if timeout 5 mpremote connect "$node" exec 'pass' >/dev/null 2>&1; then
+    if repl_answers "$node"; then
       responsive+=("$node")
     fi
   done

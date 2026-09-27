@@ -587,6 +587,27 @@ if __name__ == "__main__":
         # only surviving record of why the loop actually died, and every
         # debugging session was overwriting it with an interrupted traceback.
         print("unicorn: interrupted (Ctrl-C) - not a crash, crash.log left alone")
+    except SystemExit:
+        # An in-loop update that applies calls updater._reset() ->
+        # machine.soft_reset(), which asks for the reboot by RAISING
+        # SystemExit. Without this clause that exception is caught by the
+        # BaseException handler below and written up as "MAIN DIED" - so every
+        # successful in-loop update left a crash.log claiming the loop had
+        # crashed, poisoning the one file kept for finding out why it really
+        # did. (Measured on the board 2026-09-27: a real apply wrote
+        # crash.log with updater.py line 370, in _reset, SystemExit.)
+        #
+        # It is re-raised on purpose, and that is the difference from boot.py,
+        # which swallows the same exception. Catching SystemExit CANCELS the
+        # soft reset (measured: `try: machine.soft_reset() except SystemExit`
+        # prints its handler and stays at the REPL, no reboot). boot.py can
+        # swallow it because boot.py then just falls through and runs the
+        # freshly-applied main.py; here there is nothing after this block, so
+        # swallowing would cancel the reboot, end the module and drop the board
+        # to the REPL with the loop gone - leaving the watchdog to hard-reset
+        # it 8 s later. Letting it through reboots straight into the new tree.
+        print("unicorn: reboot to finish an update - not a crash, crash.log left alone")
+        raise
     # We must know *why* the loop died, and the serial buffer is gone by the
     # time anyone looks - so record it to the filesystem where it survives.
     except BaseException as exc:

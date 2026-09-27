@@ -1,6 +1,16 @@
-"""Firmware update from the latest GitHub Release, driven by boot.py.
+"""Firmware update from the LAN service, driven by boot.py.
 
-Design memo: memos/CvaQ2nMNqaTvQbgYc8HJqW.
+Design memo: memos/CvaQ2nMNqaTvQbgYc8HJqW (the original, GitHub-over-HTTPS
+design) and the 2026-09-26 root-cause memo, which is why the transport changed.
+
+WHERE THE FILES COME FROM: not GitHub. The board cannot complete a TLS
+handshake (measured 2026-09-26: DNS and TCP:443 are fine, plain HTTP works even
+to the internet, and every HTTPS attempt fails - instantly as OSError(12,), or
+by blocking until the watchdog hard-resets the board). So the LAN service
+(galactic-unicorn-remote) fetches the release over HTTPS on the board's behalf
+and serves `manifest.json` and `firmware.pack` over plain HTTP under /firmware/*.
+See config.UPDATE_MANIFEST_URL. Integrity is unchanged: the manifest carries a
+sha256 for the pack and one per file, checked here exactly as before.
 
 Why this lives in boot.py's path and not main.py: MicroPython runs boot.py
 BEFORE main.py, so this code still runs when main.py is broken. A release that
@@ -13,18 +23,19 @@ not assumed:
 
   * no uzlib        -> the payload is UNCOMPRESSED: a flat run of
                        length-prefixed records (see scripts/build-firmware-pack.py)
-  * r.content on a ~47 KB body raises MemoryError even with 126 KB free - a
-                    single contiguous allocation failure. So the body is
-                    STREAMED with r.raw.read(CHUNK) straight into the file.
+  * a ~47 KB body read whole raises MemoryError even with 126 KB free - a
+                    single contiguous allocation failure. So the pack is
+                    STREAMED straight into the file through a sink (net.http_get
+                    with `sink`), never held whole.
   * hashlib.sha256 has no hexdigest() -> ubinascii.hexlify(h.digest())
-  * ssl.wrap_socket HANGS; ssl.SSLContext works.
   * `import os` does NOT bind os.path -> never use os.path here. A stray
     os.path.exists once ran after a successful apply and got reported as a
     failed update.
-  * the flashed firmware ships no CA bundle, so the TLS channel is encrypted
-    but NOT authenticated. Integrity rests on the manifest's sha256. This is a
-    known, accepted compromise (the path is home-LAN -> GitHub on a device the
-    owner controls), recorded in the memo - not an oversight.
+  * `usocket` has no module-level default timeout on this board, and urequests
+    builds its own socket - so `urequests` cannot be bounded at all, which is
+    what made the old check able to block past the watchdog's fuse. Hence
+    net.http_get, a raw socket with `settimeout`, which CAN be bounded (connect
+    and every read).
 
 Everything here is fail-soft: any failure leaves the current firmware exactly
 as it was and returns, so main.py runs.
@@ -48,7 +59,6 @@ That covers the failure mode the drill exposed: a release that dies on a clean
 Python exception, where nothing would otherwise ever reboot the board.
 """
 
-import gc
 import json
 import os
 import struct
@@ -89,6 +99,9 @@ WIFI_ATTEMPTS = 3
 BOOT_WIFI_ATTEMPTS = 1
 LOG_FILE = "update.log"
 MANIFEST_LIMIT = 16384
+# Hard ceiling on the pack body, so a wrong or hostile server cannot stream the
+# board into a full flash. The real pack is ~140 KB; 512 KB is generous margin.
+MAX_PACK_BYTES = 512 * 1024
 
 # --- rollback slot ---------------------------------------------------------
 # What each file means. All are tiny and all are device-written.
@@ -165,85 +178,53 @@ def _join_wifi(config, attempts=WIFI_ATTEMPTS, attempt_ms=WIFI_ATTEMPT_MS):
     return net.join_wifi(config, attempts, attempt_ms, log=_log, feed=_wdt_feed)
 
 
-def _get(url):
-    """GET a URL and hand back the open response. Caller must close it."""
-    import urequests
+def _fetch(url, timeout_s, limit=MANIFEST_LIMIT):
+    """GET a small text document over plain HTTP. Returns the decoded body.
 
-    # DNS + TCP + the TLS handshake all happen inside urequests.get and none of
-    # it can feed the fuse, so do it on both sides of the call. This matters
-    # only when the fuse is already armed - which it is whenever boot.py runs
-    # after a SOFT reset, because an armed watchdog survives one - but there it
-    # is the difference between a download and a reset mid-download. Measured:
-    # an armed 8 s fuse killed a successful join's update with no output at all.
-    _wdt_feed()
-    # Collect BEFORE the call, not after it. The handshake allocates its
-    # in/out buffers as single contiguous blocks, and the largest one this
-    # heap will hand out is 16 KB - so the second of those is what a
-    # fragmented heap refuses, and it refuses it as OSError(12) (ENOMEM)
-    # rather than MemoryError, because the allocation happens in C.
-    #
-    # Measured on the board, running the check from the render loop rather
-    # than from boot.py, where the heap is clean:
-    #   update: update check failed, keeping current firmware: OSError(12,)
-    # three times in a row, while the wifi line beside each one read
-    # status=3(up) - so the network was up and the heap was the whole problem.
-    # A collect immediately before the handshake made the same fetch succeed
-    # on its first attempt, with biggest_block at 16384.
-    gc.collect()
-    response = urequests.get(url)
-    _wdt_feed()
-    if response.status_code != 200:
-        code = response.status_code
-        response.close()
-        raise OSError("http " + str(code))
-    return response
+    This replaces the old `_get`/`_get_text` pair, which drove `urequests`.
+    urequests could not be bounded (it builds its own socket, and `usocket` has
+    no module-level default timeout on this board), and it was the call that
+    blocked past the watchdog's fuse and hard-reset the board. See lib/net.py's
+    http_get for the bounded replacement and why it is safe to run under the app
+    fuse. `limit` is a hard cap on the body, so a wrong or hostile server cannot
+    hand the board a document it cannot hold.
+    """
+    host, port, path = net.split_url(url)
+    if host is None:
+        raise ValueError("update url is not plain http: " + url)
+    status, body = net.http_get(
+        host, port, path, timeout_s, feed=_wdt_feed, read_cap=limit
+    )
+    if status != 200:
+        raise OSError("http " + str(status))
+    return body.decode()
 
 
-def _get_text(url, limit=MANIFEST_LIMIT):
-    response = _get(url)
-    try:
-        # Read in small pieces rather than in one `limit`-byte allocation. The
-        # manifest is well under a kilobyte, but `read(limit)` reserves the
-        # whole 16 KB up front and that single contiguous allocation is what a
-        # fragmented heap refuses first. Measured on the board, with the update
-        # driven from the REPL instead of from boot.py:
-        #   MemoryError('memory allocation failed, allocating 16384 bytes')
-        # and the join that preceded it had succeeded, so the window was real
-        # and the update was lost to the buffer, not the network.
-        gc.collect()
-        parts = []
-        total = 0
-        while total < limit:
-            chunk = response.raw.read(256)
-            if not chunk:
-                break
-            parts.append(chunk)
-            total += len(chunk)
-        return b"".join(parts).decode()
-    finally:
-        response.close()
+def _download(url, dest, expect_sha, timeout_s, limit=MAX_PACK_BYTES):
+    """Stream url into dest, hashing as we go. Returns the size.
 
-
-def _download(url, dest, expect_sha):
-    """Stream url into dest in chunks, hashing as we go. Returns the size."""
+    Streamed through a `sink`, so the pack is never held whole - this board's
+    heap is ~126 KB and a single 47 KB read already fails. The sha256 is checked
+    against the manifest's value before the caller is allowed to touch the
+    staged file, so a truncated or corrupt transfer cannot reach the live tree.
+    """
     import hashlib
 
-    response = _get(url)
+    host, port, path = net.split_url(url)
+    if host is None:
+        raise ValueError("update url is not plain http: " + url)
     digest = hashlib.sha256()
-    total = 0
-    try:
-        with open(dest, "wb") as fh:
-            while True:
-                _wdt_feed()
-                gc.collect()
-                chunk = response.raw.read(CHUNK)
-                if not chunk:
-                    break
-                fh.write(chunk)
-                digest.update(chunk)
-                total += len(chunk)
-    finally:
-        response.close()
+
+    def sink(data):
+        fh.write(data)
+        digest.update(data)
+
+    with open(dest, "wb") as fh:
+        status, total = net.http_get(
+            host, port, path, timeout_s, feed=_wdt_feed, sink=sink, read_cap=limit
+        )
+    if status != 200:
+        raise OSError("http " + str(status))
     if _hexdigest(digest) != expect_sha:
         raise ValueError("pack sha256 mismatch")
     return total
@@ -481,7 +462,8 @@ def _recover():
 
 def _update(config):
     base = config.UPDATE_MANIFEST_URL.rsplit("/", 1)[0]
-    manifest = json.loads(_get_text(config.UPDATE_MANIFEST_URL))
+    timeout_s = getattr(config, "UPDATE_TIMEOUT_S", 3)
+    manifest = json.loads(_fetch(config.UPDATE_MANIFEST_URL, timeout_s))
     version = manifest["version"]
     current = _local_version()
     if version == current:
@@ -493,7 +475,9 @@ def _update(config):
         _log("no update: " + version + " is already running")
         return False
     pack = manifest["pack"]
-    size = _download(base + "/" + pack["file"], PACK_PATH, pack["sha256"])
+    size = _download(
+        base + "/" + pack["file"], PACK_PATH, pack["sha256"], timeout_s
+    )
     written = _unpack(manifest["files"])
     # Only now - new pack downloaded, every file verified in :next/ - spend the
     # flash on a rollback copy of the tree we are about to replace.

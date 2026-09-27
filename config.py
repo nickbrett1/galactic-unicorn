@@ -106,19 +106,57 @@ UTC_OFFSET_S = -4 * 3600  # EDT; use -5 * 3600 after the DST switch
 # lib/updater.py are excluded from the update itself.
 UPDATE_ENABLED = True
 
-# releases/latest/download/manifest.json is the one URL a device can fetch
-# without knowing the version. The pack is fetched from the same directory.
-UPDATE_MANIFEST_URL = (
-    "https://github.com/nickbrett1/galactic-unicorn/releases/latest/download/manifest.json"
-)
+# The manifest and the pack come from the LAN service, over PLAIN HTTP.
+#
+# They used to come from `releases/latest/download/manifest.json` on GitHub -
+# i.e. over HTTPS - and this board cannot complete a TLS handshake. Measured on
+# the board 2026-09-26: DNS github.com (17 ms), TCP :443 (16 ms), LAN plain HTTP
+# and even *internet* plain HTTP (example.com, 95 ms) all work, while EVERY
+# HTTPS attempt failed - instantly as OSError(12,), or by blocking long enough
+# to trip the hardware watchdog and hard-reset the board. The code's own
+# classify_failure calls OSError(12) "heap", and that label is wrong here: the
+# TLS buffers allocate fine (~25 KB) and a 64 KB contiguous block allocates, so
+# it is the handshake itself, deeper in mbedTLS/lwIP.
+#
+# So the check could never read a manifest at all: 0 occurrences of the then-
+# latest version in 89 KB of update.log, while "no update: <old> is already
+# running" appeared 103 times. The board had not once seen a manifest in its
+# life.
+#
+# The fix is to stop making the one device that cannot do TLS the device that
+# must. The service on the LAN (galactic-unicorn-remote) fetches the release
+# over HTTPS on the board's behalf, verifies it, and serves the manifest and the
+# pack over plain HTTP under /firmware/*. That host is the one the board already
+# talks to every second for the remote poll, so nothing new is exposed and no
+# TLS stack is needed on the board. Integrity is unchanged: the manifest still
+# carries a sha256 for the pack and a sha256 per file, and the updater checks
+# them exactly as before (lib/updater.py), so a corrupt or truncated transfer
+# still cannot reach the live tree.
+#
+# The pack is fetched from the same directory as the manifest (updater._update
+# derives the base by dropping the last path segment), so this is the only
+# string that has to change to move the source again.
+UPDATE_MANIFEST_URL = "http://192.168.1.2:3009/firmware/manifest.json"
+
+# The bound on EVERY socket operation of an update fetch - connect and each
+# individual read alike (lib/net.py:http_get sets it on the socket).
+#
+# This is what makes the check fit under the watchdog instead of needing a
+# longer fuse. The fuse CANNOT be lengthened on this board (measured:
+# `machine.WDT(timeout=30000)` fires in under 11 s, not at 30 s), so
+# lib/watchdog.py no longer offers a longer one - and the network phase has to
+# be short rather than "protected". With this timeout the longest stretch that
+# cannot feed the fuse is one 3 s read, comfortably inside the ~8 s app fuse.
+UPDATE_TIMEOUT_S = 3
 
 # boot.py gets ONE look at the network per boot, and the network here fails in
 # windows of minutes rather than failing outright: measured on this board, six
 # joins got an IP in ~3 s and six more, minutes later, got none at all. No
 # boot-time budget can outlast that, so the loop retries on a slow timer and a
 # window that opens an hour later is still caught. The cost is that an attempt
-# blocks the display while it waits on the network (up to ~30 s in a dead
-# window), which is why this is minutes and not seconds.
+# blocks the display while it waits on the network - the join is fed to the
+# watchdog while it waits (lib/net.py:wait_for_ip), and the fetch itself is
+# bounded by UPDATE_TIMEOUT_S - which is why this is minutes and not seconds.
 UPDATE_RETRY_MS = 15 * 60 * 1000
 
 # ---------------------------------------------------------------------------

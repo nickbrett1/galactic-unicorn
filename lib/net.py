@@ -24,7 +24,12 @@ Subset note: this module stays inside MicroPython 1.19.1's language subset
 (roughly CPython 3.4). No f-strings, no walrus operator, no type annotations.
 """
 
+import socket
 import time
+
+# One socket read is at most this many bytes, so a wrong or hostile server
+# cannot make a single `sock.recv()` allocate more than the board can hold.
+CHUNK = 256
 
 
 def _noop(*_args, **_kwargs):
@@ -34,6 +39,160 @@ def _noop(*_args, **_kwargs):
 def _log_with(log, message, exc=None):
     if log is not None:
         log(message, exc)
+
+
+# --- bounded plain-HTTP GET (shared by the updater) -------------------------
+#
+# One bounded GET, used by lib/updater.py for both the manifest and the pack.
+# It lives here, beside the wifi helpers, so the board keeps ONE way of talking
+# HTTP and the two callers cannot drift.
+#
+# Why not `urequests`: it can do neither of the two things the update path
+# needs. It cannot be bounded - it builds its own socket, so the caller cannot
+# `settimeout` it, and `usocket` has no module-level default (`dir(socket)` on
+# this board is `socket, getaddrinfo` and the constants; there is no
+# setdefaulttimeout). And it cannot stream a large body, which is why the old
+# `_download` had to reach into `response.raw` anyway. A raw socket with an
+# explicit timeout gets both, and it is the pattern lib/remote.py already
+# proves on this board for the poll.
+#
+# The timeout is the whole point: it bounds connect AND every individual read,
+# so the longest stretch that goes unfed is one timeout, not "however long the
+# network feels like". That is what lets the update check run under the ~8 s
+# app fuse - the fuse cannot be lengthened on this board (lib/watchdog.py).
+
+
+def split_url(url):
+    """("http://host:port/path") -> (host, port, path), or (None, None, None).
+
+    Only plain http:// is accepted. https:// returns Nones rather than being
+    silently downgraded: this board has no working TLS (see
+    config.UPDATE_MANIFEST_URL), so an https URL here is a configuration error
+    and should fail loudly, not quietly become something else.
+    """
+    if not url:
+        return None, None, None
+    if not url.startswith("http://"):
+        return None, None, None
+    rest = url[7:]
+    slash = rest.find("/")
+    if slash < 0:
+        hostport, path = rest, "/"
+    else:
+        hostport, path = rest[:slash], rest[slash:]
+    if not hostport:
+        return None, None, None
+    if ":" in hostport:
+        host, _, port_str = hostport.partition(":")
+        try:
+            port = int(port_str)
+        except ValueError:
+            return None, None, None
+    else:
+        host, port = hostport, 80
+    if not host:
+        return None, None, None
+    return host, port, path
+
+
+def status_of(head):
+    """The status code from a response head's first line, or 0 if unreadable."""
+    line_end = head.find(b"\r\n")
+    if line_end < 0:
+        line_end = len(head)
+    fields = head[:line_end].decode().split(" ")
+    if len(fields) < 2:
+        return 0
+    try:
+        return int(fields[1])
+    except ValueError:
+        return 0
+
+
+def _read_head(sock, head_limit=1024):
+    """Read up to the blank line that ends the response head.
+
+    Returns (head_bytes, leftover). `leftover` is the part of the BODY that
+    arrived in the same read as the head, and it must not be dropped: a small
+    manifest is smaller than one read, so its whole body usually arrives here.
+    """
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        if len(buf) > head_limit:
+            raise OSError("http response head too long")
+        piece = sock.recv(64)
+        if not piece:
+            break
+        buf += piece
+    idx = buf.find(b"\r\n\r\n")
+    if idx < 0:
+        return buf, b""
+    return buf[:idx], buf[idx + 4:]
+
+
+def http_get(host, port, path, timeout_s, feed=None, sink=None, read_cap=None,
+             chunk=CHUNK):
+    """One bounded plain-HTTP/1.0 GET. It cannot hang.
+
+    `sock.settimeout(timeout_s)` bounds connect and every read, so nothing here
+    can block past one timeout. `sink(data)` receives the body as it arrives, so
+    a 139 KB pack is never held whole (the heap is ~126 KB and a single 47 KB
+    read already fails on this board); with `sink` None the body is returned.
+    `read_cap`, when set, stops the read at that many body bytes, so a wrong or
+    hostile server cannot hand the board a body it cannot hold.
+
+    Returns (status, body_bytes) when `sink` is None, else (status, total_bytes).
+    Raises OSError from the socket on connect/read failure - the caller decides
+    what that means.
+    """
+    if feed is None:
+        feed = _noop
+    feed()
+    addr = socket.getaddrinfo(host, port)[0][-1]
+    sock = socket.socket()
+    parts = []
+    total = 0
+    try:
+        sock.settimeout(timeout_s)
+        sock.connect(addr)
+        request = (
+            "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+        )
+        sock.send(request.encode())
+        feed()
+        head, leftover = _read_head(sock)
+        status = status_of(head)
+        if leftover:
+            total += _take(leftover, sink, parts, read_cap, total)
+        while read_cap is None or total < read_cap:
+            # Feed before each read, not after: the fuse must be reset before
+            # the blocking call, not once it has already come back.
+            feed()
+            take = chunk if read_cap is None else min(chunk, read_cap - total)
+            if take <= 0:
+                break
+            data = sock.recv(take)
+            if not data:
+                break
+            total += _take(data, sink, parts, read_cap, total)
+    finally:
+        sock.close()
+    if sink is None:
+        return status, b"".join(parts)
+    return status, total
+
+
+def _take(data, sink, parts, read_cap, total):
+    """Deliver one body slice to the sink (or buffer), honouring `read_cap`."""
+    if read_cap is not None and total + len(data) > read_cap:
+        data = data[: read_cap - total]
+    if not data:
+        return 0
+    if sink is None:
+        parts.append(data)
+    else:
+        sink(data)
+    return len(data)
 
 
 def wdt_sleep(ms, feed=None):

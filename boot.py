@@ -35,7 +35,7 @@ the pixel cannot be drawn from main.py instead.
 #     recover   = 7 ms
 #     join_wifi = 20070 ms     (three 10 s DHCP attempts; two got no IP)
 #
-# and config.py documents the same phase as "up to ~30 s in a dead window".
+# and the join can burn a whole wifi attempt before it gives up.
 # main.py cannot run until all of it is over, so an indicator living in main.py
 # appears after twenty seconds and then the HELLO banner replaces it - which is
 # precisely what was reported: "it takes a really long time for the white icon

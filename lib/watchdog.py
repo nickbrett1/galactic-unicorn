@@ -46,11 +46,16 @@ where a failure to feed must not itself take the display down. If the board
 has no WDT (a future `micropython` build without it), every call is a silent
 no-op and the board keeps its old behaviour - degraded, not broken.
 
-And where a loop cannot feed at all - a blocking `urequests.get` that owns the
-thread for as long as the network takes - widening the fuse is the answer
-rather than feeding it: `NETWORK_TIMEOUT_MS` is armed around the update check
-and TIMEOUT_MS restored after, in a `finally`. A rule that says "never block
-longer than the fuse" is only useful if the fuse can be the right length.
+And where a loop cannot feed at all, the answer used to be to widen the fuse
+rather than feed it: `NETWORK_TIMEOUT_MS = 30000` was armed around the update
+check and `TIMEOUT_MS` restored after, in a `finally`. That is gone, because the
+board cannot honour it (see WDT_MAX_MS below). The update path was instead made
+to fit under the 8 s fuse - it fetches the manifest and the pack over plain
+HTTP from the LAN service, with an explicit socket timeout on every operation
+(config.UPDATE_TIMEOUT_S, lib/net.py:http_get) - so there is nothing left that
+needs a longer window. A rule that says "never block longer than the fuse" is
+only useful if the fuse can be the right length; on this board it cannot, so the
+blocking is bounded instead.
 """
 
 import machine
@@ -59,42 +64,66 @@ import machine
 # a wifi poll at 200 ms or one 1 KB chunk off a socket), and short enough that
 # a wedged app is back on its feet before anyone notices the panes stopped.
 #
-# This is the fuse for the APP - the render loop, which feeds it every 20 ms.
-# It is NOT the right fuse for the update check (see NETWORK_TIMEOUT_MS).
+# This is the fuse for the APP - the render loop, which feeds it every 20 ms -
+# and, since 2026-09-26, for the update check too: that path is now bounded to
+# fit under it rather than asking for a longer fuse it cannot have (WDT_MAX_MS).
 TIMEOUT_MS = 8000
 
-# The fuse for the network phase of an update check, and the reason the fuse is
-# a parameter at all rather than a constant.
+# The longest fuse this board will actually give. `arm()` clamps every request
+# to it, so no caller can believe it holds a window the hardware refused.
 #
-# `check_for_update` leaves the render loop and spends its time inside
-# `urequests.get` - DNS, TCP and the TLS handshake - and updater._get says it
-# plainly: none of that can feed the fuse. config.py documents the same attempt
-# as blocking "up to ~30 s in a dead window". With an 8 s fuse, that is not a
-# slow check, it is a REBOOT.
+# History, because deleting a constant needs a reason. The update check used to
+# widen the fuse to `NETWORK_TIMEOUT_MS = 30000`, on the reasoning that
+# `check_for_update` leaves the render loop, spends its time inside a blocking
+# `urequests.get` (DNS, TCP and the TLS handshake) that cannot feed the fuse,
+# and so would turn an 8 s fuse into a REBOOT on a dead network. The reset log
+# backed that up: every reset in wifi.log was reset_cause=3 (WDT_RESET), and the
+# unattended ones each landed about one UPDATE_RETRY_MS after a boot - exactly
+# when the in-loop check ran.
 #
-# Measured on this board, 2026-09-21: every reset in wifi.log is reset_cause=3
-# (WDT_RESET) - the board was never crashing - and the two unattended ones
-# (13:14:24, 15:07:43) each land about one UPDATE_RETRY_MS after a boot, i.e.
-# exactly when the in-loop check ran. update.log beside them shows the network
-# stalling ("wifi attempt 1/3 got no IP" x8, "OSError('http 504',)").
+# Measured on this board, 2026-09-26: the widening does not work. An explicit
+# `machine.WDT(timeout=30000)` did NOT give 30 s - the fuse fired in under 11 s.
+# The RP2040 watchdog cannot provide a ~30 s window, so asking for one left the
+# code believing it had 30 s while it really had ~8, which is strictly worse
+# than not asking: it hides the real budget. So the fiction is removed.
 #
-# The cost of a reboot here is not a lost check: it unwinds whatever the panel
-# was doing, including a running countdown. So the check widens the fuse for
-# the network phase and puts it back afterwards (main.py, and the arm() calls
-# in lib/updater.py's own blocking loops). 30 s is the documented worst case
-# plus margin: long enough that a stalled check finishes or gives up, short
-# enough that a genuinely wedged board is still back on its feet in half a
-# minute.
-NETWORK_TIMEOUT_MS = 30000
+# The update path is instead made short enough to fit (see the module docstring
+# and config.UPDATE_TIMEOUT_S): plain HTTP from the LAN, a literal IP, an
+# explicit socket timeout on connect and on every read. The rule stands - no
+# loop may block longer than TIMEOUT_MS without calling feed() - and it is now
+# true of the update check as well.
+WDT_MAX_MS = TIMEOUT_MS
 
 _wdt = None
 
 
+def clamp_timeout_ms(requested):
+    """The fuse the hardware will actually arm, for a requested value.
+
+    Pure and host-tested (tests/test_watchdog.py). A request above WDT_MAX_MS is
+    not honoured on this board - measured, see above - so it is clamped here
+    rather than silently mis-delivered by the loader. Anything unusable (junk, a
+    non-positive number) falls back to the app fuse, which is always safe.
+    """
+    try:
+        ms = int(requested)
+    except (TypeError, ValueError):
+        return TIMEOUT_MS
+    if ms <= 0:
+        return TIMEOUT_MS
+    return min(ms, WDT_MAX_MS)
+
+
 def arm(timeout_ms=TIMEOUT_MS):
-    """Start (or restart) the fuse. Returns True if the board has a watchdog."""
+    """Start (or restart) the fuse. Returns True if the board has a watchdog.
+
+    `timeout_ms` is CLAMPED to WDT_MAX_MS (clamp_timeout_ms), so a caller asking
+    for a window this board cannot give still gets a fuse that fires when it
+    says it will, instead of one that fires early and takes the panel with it.
+    """
     global _wdt
     try:
-        _wdt = machine.WDT(timeout=timeout_ms)
+        _wdt = machine.WDT(timeout=clamp_timeout_ms(timeout_ms))
         return True
     except Exception:  # noqa: BLE001 - no WDT is a degradation, not a crash
         _wdt = None

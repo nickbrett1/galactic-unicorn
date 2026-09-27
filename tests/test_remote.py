@@ -16,11 +16,19 @@ in): no f-strings, no walrus, no type annotations, py3.4-ish syntax.
 
 import os
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
-import remote
+# MicroPython's time helpers, so poll_if_due's cadence arithmetic runs under
+# CPython too (the board has ticks_ms/ticks_diff; the host does not).
+if not hasattr(time, "ticks_ms"):
+    time.ticks_ms = lambda: int(time.monotonic() * 1000)
+    time.ticks_diff = lambda a, b: a - b
+    time.sleep_ms = lambda ms: time.sleep(ms / 1000.0)
+
+import remote  # after the time shim above
 
 # -- the cadence clamp (server sets it; the board only bounds it) -------------
 
@@ -184,3 +192,51 @@ def test_take_cycle_request_is_taken_exactly_once():
     remote.Remote._cycle_radio(stub)
     assert remote.Remote.take_cycle_request(stub) is True
     assert remote.Remote.take_cycle_request(stub) is False
+
+
+# -- a silent success would hide a recovery, so the first one speaks ----------
+
+class _PollStub:
+    """Only what Remote.poll_if_due touches, so the seam can be pinned."""
+
+    def __init__(self, fails=0, boom=None):
+        self._disabled_reason = None
+        self.next_poll_at = 0
+        self.floor_ms = 1000
+        self._fails_since_ok = fails
+        self._boom = boom
+        self.logs = []
+
+    def _poll(self, now):
+        if self._boom is not None:
+            raise self._boom
+
+    def _net_log(self, message):
+        self.logs.append(message)
+
+    def _log_failure(self, exc, what, now):
+        self.logs.append("failed:" + what)
+
+    def _note_failure(self):
+        self._fails_since_ok += 1
+
+    def _schedule(self, now, ms):
+        self.next_poll_at = now + ms
+
+
+def test_poll_success_after_failures_is_logged_once():
+    stub = _PollStub(fails=3)
+    remote.Remote.poll_if_due(stub, 1000)
+    assert stub._fails_since_ok == 0
+    assert stub.logs == ["poll recovered after 3 consecutive failures"]
+    # The next success has nothing to report and must stay silent.
+    remote.Remote.poll_if_due(stub, 3000)
+    assert stub.logs == ["poll recovered after 3 consecutive failures"]
+
+
+def test_poll_failure_still_counts_and_reschedules():
+    stub = _PollStub(boom=OSError(110))
+    remote.Remote.poll_if_due(stub, 1000)
+    assert stub._fails_since_ok == 1
+    assert "failed:poll" in stub.logs
+    assert stub.next_poll_at == 2000

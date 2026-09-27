@@ -438,11 +438,21 @@ class Remote:
             return
         try:
             self._poll(now)
-            self._fails_since_ok = 0
         except Exception as exc:  # noqa: BLE001 - a poll must not kill the loop
             self._log_failure(exc, "poll", now)
             self._note_failure()
             self._schedule(now, self.floor_ms)
+            return
+        if self._fails_since_ok:
+            # A silent success is invisible in the log, and "the poll stopped
+            # failing" is exactly the evidence a recovery needs. One line per
+            # outage, written where the failures were.
+            self._net_log(
+                "poll recovered after "
+                + str(self._fails_since_ok)
+                + " consecutive failures"
+            )
+        self._fails_since_ok = 0
 
     def _note_failure(self):
         """Count it, and cycle the radio once the run is long enough.

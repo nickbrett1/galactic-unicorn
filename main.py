@@ -46,6 +46,38 @@ LOOP_MS = 20
 # an update is applied, because after that boot-ok.txt already matches.
 BOOT_OK_SOAK_MS = 10000
 
+# Building the remote can fail transiently right after boot: it is constructed
+# while the boot-time allocations are still settling, and it HAS raised
+# MemoryError there ("allocating 640 bytes" at /lib/remote.py line 50,
+# 2026-09-27). Giving up permanently silently disabled the remote for the rest
+# of the session, so the attach is retried a few times from the loop with a
+# gc.collect() first - the boot garbage is what the allocation was competing
+# with. Bounded, and it says when it stops trying.
+REMOTE_ATTACH_RETRIES = 3
+REMOTE_ATTACH_RETRY_MS = 10000
+
+
+def _attach_remote(engine, config, log, fw):
+    """Build the remote. Returns (remote_or_None, retryable). Never raises.
+
+    `retryable` is False when retrying cannot possibly help - no lib/remote.py
+    on this build, or a remote that built fine - so the loop stops asking.
+    """
+    try:
+        from remote import Remote
+
+        remote = Remote(engine, config, log, fw=fw)
+        log("remote: " + remote.describe())
+        return remote, False
+    except ImportError:
+        log("remote: no remote module on this build")
+        return None, False
+    except Exception as exc:  # noqa: BLE001 - the display must survive a bad remote
+        from sys import print_exception
+
+        print_exception(exc)
+        return None, True
+
 # Every switch we care about, by the name the engine uses.
 ALL_SWITCHES = {
     "A": SWITCHES["A"],
@@ -394,14 +426,16 @@ def main():
     # constructed even when disabled, so the log always says which way it is -
     # "disabled (no device token)" and "polling http://..." are very different
     # things to find on a board that is not responding to the phone.
-    try:
-        from remote import Remote
-
-        remote = Remote(engine, config, log, fw=firmware_version())
-        log("remote: " + remote.describe())
-    except Exception as exc:  # noqa: BLE001 - the display must survive a bad remote
-        print_exception(exc)
-        remote = None
+    #
+    # Built through _attach_remote so the same attempt can be repeated from the
+    # loop: this construction happens right after the boot-time allocations and
+    # HAS failed with MemoryError (2026-09-27, "memory allocation failed,
+    # allocating 640 bytes" at /lib/remote.py line 50). The old code gave up
+    # then and there, and the log never mentioned the remote again - a single
+    # unlucky boot silently cost remote control for the whole session.
+    remote, remote_retryable = _attach_remote(engine, config, log, firmware_version())
+    remote_retries = REMOTE_ATTACH_RETRIES if (remote is None and remote_retryable) else 0
+    remote_retry_at = time.ticks_ms()
 
     # Collect proactively rather than only when an allocation fails: the
     # default (-1) lets the heap run to the wire, and an allocation failure at
@@ -450,6 +484,25 @@ def main():
             take_cycle = getattr(remote, "take_cycle_request", None)
             if take_cycle is not None and take_cycle():
                 remote.cycle_radio()
+        # Retry a remote that failed to build at boot (see _attach_remote).
+        # Bounded, spaced out, and honest when it stops: no remote control for
+        # a session must never be something the log fails to mention. This sits
+        # before the poll use below, so a remote that appears works the same
+        # frame it appears.
+        if (
+            remote is None
+            and remote_retries > 0
+            and time.ticks_diff(now, remote_retry_at) >= REMOTE_ATTACH_RETRY_MS
+        ):
+            remote_retry_at = now
+            remote_retries -= 1
+            gc.collect()
+            remote, retryable = _attach_remote(engine, config, log, firmware_version())
+            if remote is None:
+                if not retryable:
+                    remote_retries = 0
+                elif remote_retries == 0:
+                    log("remote: gave up building the remote this session")
         # One cheap look at the radio per second, written down where it survives
         # the session. This is the instrument for the one thing we still cannot
         # see from the outside: whether a DHCP failure leaves the board UP

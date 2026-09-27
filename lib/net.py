@@ -195,6 +195,57 @@ def _take(data, sink, parts, read_cap, total):
     return len(data)
 
 
+# --- bounded NTP query (the ambient clock) ----------------------------------
+#
+# The same rule as the GET above, for the same reason, and it is not optional:
+# main.py's NTP retry calls `watchdog.feed()` and THEN goes to the network, so
+# the call that follows has to fit inside the fuse on its own. `ntptime.settime`
+# could not be bounded -- it builds its own socket, picks its own timeout, and
+# resolves a HOSTNAME, and getaddrinfo is the one thing here that has no
+# timeout at all. Measured on this board, 2026-09-27: with NTP unreachable,
+# every boot died about a second after the third failure, reset_cause=3, and
+# `pool.ntp.org` made it a DNS problem as well as an NTP one.
+#
+# So the query is ours, the host is a literal IP (config.NTP_HOST: no
+# getaddrinfo, no DNS in the path at all), and `settimeout` bounds the send and
+# the read. The longest stretch that goes unfed is one timeout, which is what
+# the fuse needs to be true.
+
+NTP_EPOCH_DELTA = 2208988800  # 1900-01-01 -> 1970-01-01, in seconds
+
+
+def ntp_time(host, timeout_s, port=123, feed=None):
+    """Seconds since the Unix epoch, from `host`. Bounded; raises on failure.
+
+    `host` should be a literal IP (config.NTP_HOST) -- a name would put an
+    unbounded getaddrinfo back in front of the bounded part. Any failure (no
+    reply, short reply, nonsense reply) raises OSError, which is what main.py's
+    retry loop is written against; nothing here blocks past one timeout.
+    """
+    if feed is None:
+        feed = _noop
+    feed()
+    addr = socket.getaddrinfo(host, port)[0][-1]
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(timeout_s)
+        query = bytearray(48)
+        query[0] = 0x1B  # LI = 0 (no warning), VN = 3 (v3), Mode = 3 (client)
+        sock.sendto(query, addr)
+        msg = sock.recv(48)
+    finally:
+        sock.close()
+    if len(msg) < 48:
+        raise OSError("short ntp reply")
+    # Bytes 40..44 are the server's RECEIVE timestamp: the moment our query
+    # arrived, which is the sample that costs no round-trip correction. Read in
+    # the same place ntptime does; the transmit timestamp we sent is zero.
+    seconds = int.from_bytes(msg[40:44], "big") - NTP_EPOCH_DELTA
+    if seconds <= 0:
+        raise OSError("bad ntp reply")
+    return seconds
+
+
 def wdt_sleep(ms, feed=None):
     """Sleep in fuse-sized steps. The fuse is 8 s and an attempt is 10 s."""
     started = time.ticks_ms()

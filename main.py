@@ -67,6 +67,21 @@ def load_routines(path=ROUTINES_PATH):
     return data.get("routines", []), data.get("buttons", {})
 
 
+def _set_clock(epoch_s):
+    """Set the RP2040's RTC from Unix seconds (UTC).
+
+    The last thing `ntptime.settime()` did, kept faithfully so nothing
+    downstream changes: the RTC holds UTC and the display applies
+    config.UTC_OFFSET_S itself (lib/ambient.py). The weekday is 1..7 with
+    Monday as 1, which is why it is `tm[6] + 1` -- time.localtime's weekday is
+    0..6 with Monday as 0.
+    """
+    import machine
+
+    tm = time.localtime(epoch_s)
+    machine.RTC().datetime((tm[0], tm[1], tm[2], tm[6] + 1, tm[3], tm[4], tm[5], 0))
+
+
 def sync_ntp(log):
     """Best-effort NTP, for the ambient clock only. Never raises."""
     if not config.WIFI_ENABLED or not config.WIFI_SSID:
@@ -99,16 +114,24 @@ def sync_ntp(log):
                 watchdog.feed()
                 time.sleep_ms(200)
         log("ntp: wifi up, syncing")
-        import ntptime
+        # NOT `ntptime.settime()`. That builds its own socket, picks its own
+        # timeout, and resolves a hostname -- and getaddrinfo has no timeout at
+        # all, so a dead NTP server left this loop's blocking call longer than
+        # the fuse that had just been fed for it (measured 2026-09-27: a hard
+        # reset about a second after the third failure, every boot,
+        # reset_cause=3). lib/net.py:ntp_time does the same query with an
+        # explicit socket timeout, so the FAILING path is bounded too -- which
+        # is the whole point, because the failing path is the one that has to
+        # degrade to the status pixel instead of rebooting the board.
+        import net
 
-        ntptime.host = config.NTP_HOST
-        # Retry: the FIRST query after association can time out - DNS/route are
-        # not warm yet, and ntptime's built-in timeout is only 1 s. Without this
-        # the clock silently degrades to the status pixel on a cold boot.
+        hosts = getattr(config, "NTP_HOSTS", None) or (config.NTP_HOST,)
+        timeout_s = getattr(config, "NTP_TIMEOUT_S", 2)
         for attempt in range(1, config.NTP_ATTEMPTS + 1):
+            host = hosts[(attempt - 1) % len(hosts)]
             watchdog.feed()
             try:
-                ntptime.settime()
+                _set_clock(net.ntp_time(host, timeout_s, feed=watchdog.feed))
                 log(f"ntp: synced (attempt {attempt}) -> {time.localtime()}")
                 return True
             except Exception as exc:  # noqa: BLE001 - retried below

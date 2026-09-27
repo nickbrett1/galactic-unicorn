@@ -49,6 +49,11 @@ import time
 
 import reconcile
 
+try:
+    import wedge
+except ImportError:  # pragma: no cover - the host suite may not have it
+    wedge = None
+
 # Mirror the board's own state names for the two the poller treats specially.
 # Kept as literals (not an import of lib/routine.py) so this module stays
 # importable on the host: lib/routine.py pulls in display/bigfont/icons.
@@ -138,6 +143,11 @@ def poll_path(report, token):
         parts.append("rssi=" + str(report["rssi"]))
     if "uptime_s" in report:
         parts.append("uptime_s=" + str(report["uptime_s"]))
+    # The board's own wedge tally (lib/wedge.py). An extra query parameter the
+    # service may ignore; it is carried so the service's timeline of a quiet
+    # window is joined by the board's account of the same window.
+    if "wedge" in report:
+        parts.append("wedge=" + str(report["wedge"]))
     return "/device/poll?" + "&".join(parts)
 
 
@@ -377,6 +387,11 @@ class Remote:
         # A cycle the poller has ASKED for but not performed: the render loop
         # owns the doing (see _cycle_radio and main.py).
         self.cycle_pending = False
+        # What the service cannot see: the board's own accounting of the wedge
+        # (lib/wedge.py). Counters in RAM for this boot, and a bounded flash
+        # file that survives the WDT reset a wedge tends to end in. None when
+        # the module is absent (host-only), so every use is guarded.
+        self.journal = wedge.Journal(self.boot, log=log) if wedge else None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -461,6 +476,8 @@ class Remote:
                 + str(self._fails_since_ok)
                 + " consecutive failures"
             )
+            if self.journal is not None:
+                self.journal.note_recovery(self._fails_since_ok)
         self._fails_since_ok = 0
 
     def _note_failure(self):
@@ -496,6 +513,8 @@ class Remote:
         """
         self._fails_since_ok = 0
         self.cycle_pending = True
+        if self.journal is not None:
+            self.journal.note_cycle(None)
         self._net_log(
             str(self.radio_reset_after)
             + " polls failed with the link up - the radio needs a cycle"
@@ -521,6 +540,8 @@ class Remote:
             "radio cycle recovered the radio" if recovered
             else "radio cycle did not recover the radio"
         )
+        if self.journal is not None:
+            self.journal.note_cycle(recovered)
         return recovered
 
     def _schedule(self, now, ms):
@@ -616,6 +637,7 @@ class Remote:
             remaining_s,
             _rssi(wlan),
             uptime_s,
+            wedge=(self.journal.summary() if self.journal is not None else None),
         )
 
     def _apply(self, desired, report, now):
@@ -660,6 +682,18 @@ class Remote:
         except Exception:  # noqa: BLE001 - logging must never be fatal
             free = None
         cause = classify_failure(exc, free, link)
+        if self.journal is not None:
+            # The board's own tally, for the next successful poll to carry back
+            # (lib/wedge.py): the service sees the quiet, this is the why.
+            self.journal.note_failure(
+                cause,
+                where,
+                exc,
+                free,
+                link,
+                status=status,
+                state=self.engine.state,
+            )
         line = (
             "remote: "
             + where

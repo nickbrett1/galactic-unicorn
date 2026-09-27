@@ -172,6 +172,7 @@ class _CycleStub:
         self.radio_reset_after = 3
         self.cycle_pending = False
         self._fails_since_ok = 3
+        self.journal = None  # _cycle_radio notes the request (lib/wedge.py)
         self.logs = []
 
     def _net_log(self, message):
@@ -204,6 +205,7 @@ class _PollStub:
         self.next_poll_at = 0
         self.floor_ms = 1000
         self._fails_since_ok = fails
+        self.journal = None  # poll_if_due notes a recovery (lib/wedge.py)
         self._boom = boom
         self.logs = []
 

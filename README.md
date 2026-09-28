@@ -200,6 +200,16 @@ panel a cloud is recognised by its **tone**, not its outline: the lit top and
 shadowed base give it volume, where a single flat colour read as a blob or a
 hill.
 
+That underside shade is a **lens, not a band**. It first filled the bottom two
+rows edge to edge, and on the panel that read as a slab the cloud was sitting
+on — a hard dark bar under a lit shape, more like a waterline than weather.
+Real cloud shading is graded: darkest under the thickest part, thinning to
+nothing where the cloud thins out. So the shade now steps outward as it
+descends — 4 cells wide, then 8, then 16 in a 20-cell base — and stops short of
+the silhouette on every row, leaving body ink at the flanks. The stepping *is*
+the blend: three widths down three rows reads as a gradient at viewing
+distance, where a single step reads as a bar.
+
 `icons._draw_frame` paints each ink with its own pen (falling back to the body
 pen when one is not supplied) and `ambient._draw_weather` picks the palette by
 condition. The temperature digits stay on `WEATHER_RGB`.

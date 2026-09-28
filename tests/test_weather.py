@@ -123,15 +123,29 @@ def test_every_weather_glyph_is_shaded():
 
 
 def test_the_cloud_is_lit_on_top_and_shaded_underneath():
-    """The shade reads by TONE: lit top, mid body, shadow along the base."""
+    """The shade reads by TONE: lit crown, mid body, a shaded underside."""
     (cloud,) = icons.WEATHER_ICONS["cloud"]
     rows = [r for r, row in enumerate(cloud) if set(row) - {"."}]
     assert rows, "the cloud must draw something"
 
     # The crown is sunlit - no body or shade sits above the lit edge.
     assert set(cloud[rows[0]]) <= set("L."), cloud[rows[0]]
-    # The base is in shadow - the bottom inked row is shade (and a rim edge).
-    assert set(cloud[rows[-1]]) <= set("S."), cloud[rows[-1]]
+
+    # The base is shaded, but the shade is a LENS and not a band: it steps
+    # outward as it descends and stops short of the silhouette on every row,
+    # leaving body ink on the flanks. A shade run that reached the edge is the
+    # flat slab this glyph deliberately stopped drawing (lib/icons.py `_CLOUD`).
+    widths = []
+    for row in [cloud[r] for r in rows[-3:]]:
+        inked = [i for i, ink in enumerate(row) if ink != "."]
+        assert row[inked[0]] != "S" and row[inked[-1]] != "S", row
+        shaded = [i for i, ink in enumerate(row) if ink == "S"]
+        assert shaded, row
+        # one contiguous run, never split into per-lobe puddles
+        assert shaded == list(range(shaded[0], shaded[-1] + 1)), row
+        widths.append(len(shaded))
+    # wider at every step down: the stepping IS the blend
+    assert widths == sorted(widths) and len(set(widths)) == 3, widths
 
     # All three extra inks appear, and there is a body inside the shading.
     flat = "".join(cloud)

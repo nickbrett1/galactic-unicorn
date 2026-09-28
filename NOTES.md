@@ -372,7 +372,7 @@ pre-existing, and it kept the current firmware as designed.
   outline - that is why every flat-blue-plus-rim pass still looked like a blob
   or a hill. The glyph now carries four inks:
     'X' body   `CLOUD_BODY_RGB  = (135, 165, 180)`
-    'L' lit    `CLOUD_LIT_RGB   = (150, 178, 190)`  up-facing edges + the row under
+    'L' lit    `CLOUD_LIT_RGB   = (140, 170, 187)`  up-facing edges + the row under
     'S' shade  `CLOUD_SHADE_RGB = (62,  95, 120)`   the underside band
     'O' rim    `CLOUD_RIM_RGB   = (95, 100, 108)`   quiet edge on the flanks
   The body is a soft blue-grey, NOT white: white would blow out the dark room.
@@ -398,6 +398,14 @@ pre-existing, and it kept the current firmware as designed.
   / 122 on the host with the real glyph; 150 keeps the lit-top step fresh while
   the glare goes, and 140 and below start merging into the body (panel ~74).
   Body, shade and rim unchanged.
+
+- W1 update 10 follow-up 2: "can we make it a bit less bright - still a bit too
+  much glare." `CLOUD_LIT_RGB` 150/178/190 -> 140/170/187 (panel ~82 -> ~77).
+  Rendered 150 / 140 / 134 / 128 / 122 on the host with the real glyph; the
+  reds and greens come down hardest, so what is left is a cooler, bluer
+  highlight rather than white. 134 and below still shows a step in the render
+  but only in the blue channel (panel ~73 vs body ~74 in red), i.e. it stops
+  reading as a *brightness* cue. Body, shade and rim unchanged.
 
 ### W1 update 10 — shading for every icon, and a per-condition palette (2026-09-28)
 

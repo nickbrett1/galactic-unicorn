@@ -497,3 +497,59 @@ pre-existing, and it kept the current firmware as designed.
   Still flat-banded: the SHORT cloud (`_CLOUD_TOP`, shared by rain, snow and
   thunder) keeps its two full 'S' rows - it was not what was asked about, and at
   11 px wide a lens has much less room. Worth matching if the bar bothers there.
+
+## T2 — task: "a nice jingle, not one tone" (2026-09-28)
+
+The report was exactly right, and the cause was an assumption in lib/sound.py
+that had never been checked against the board: the module believed
+`play_tone(freq, seconds)` queued non-blocking notes. It does not.
+
+### What the frozen module actually does
+
+From the binding the board ships (`Channel_play_tone`,
+micropython/modules/galactic_unicorn/galactic_unicorn.cpp):
+
+    play_tone(frequency, volume=None, attack=None, release=None)
+
+It sets the channel frequency and volume, forces `waveforms = SINE`, sets
+decay/sustain to a flat hold, and calls `trigger_attack()`. There is **no
+duration argument and no queue** - it is a sustained voice, not a note.
+
+So `for freq, dur in DONE_SOUND: ch.play_tone(int(freq), dur)` ran in a few
+microseconds: five retunes of ONE voice. The ear heard the last pitch only
+(1047 Hz) held until the handoff ended, and the note's *duration* was being
+passed as its *volume* (0.14 for most notes, 0.95 for the landing).
+
+Two consequences, only the first of which was audible:
+- one tone instead of a phrase;
+- because play_tone pins SINE, the TRIANGLE envelope `_configure()` asked for
+  never reached the ear either. `_configure` now asks for SINE so the code
+  stops claiming a waveform it cannot get.
+
+### The fix
+
+- lib/sound.py: the tune is now **walked**, not queued. `chime(now)` arms the
+  sequence and starts the synth; `tick(now)` retunes to the next note when its
+  turn comes and releases the voice once the landing note has rung. Each note
+  carries an explicit `NOTE_VOLUME` (omitting it means FULL SCALE on the
+  board, not "quiet"). Note data (`DONE_SOUND`) is unchanged - it was never
+  the problem.
+- lib/routine.py: `audio.chime(now)` at time-up, and `audio.tick(now)` once per
+  frame next to `_handle_events`, so the jingle never blocks the render loop.
+- scripts/bench-smoke.py: drives `tick()` in a loop instead of sleeping, so the
+  bench smoke hears the real sequence.
+- scripts/render-fanfare.py: sine, not triangle (matches what the board forces).
+- tests/test_sound.py: the old `case_queues_in_order` pinned the wrong API
+  (it asserted the bug). Replaced with `case_plays_over_time` - the regression
+  test - plus per-note duration, release-at-end, explicit-volume, mid-tune
+  mute, and a SINE configure check. 18/18.
+
+Host results: pytest 84 passed; ruff clean; test_sound 18/18; render 5 notes,
+1.55s, 34177 samples @ 22050 Hz.
+
+### Not done / still open
+
+- **The jingle has still not been heard on the board** (no board on the wire).
+  The melody is now scheduled the only way this synth supports, but the ear is
+  the judge. Next cable: `scripts/bench-smoke.py` plays it in full.
+- Deployed over the air by the normal release path (board is WiFi-only).

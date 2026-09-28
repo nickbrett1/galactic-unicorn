@@ -153,12 +153,19 @@ check("draw_bar 1.0/0.5/0.0", draw_bar_probe)
 audio = Audio(d, config)
 
 def play_the_fanfare():
-    audio.chime()
-    # Long enough for the whole tune: ~1.7 s of notes, then stop it clean.
+    # The tune is WALKED, not queued: play_tone retunes one sustained voice, so
+    # a loop of play_tone calls is heard as the single last note (lib/sound.py).
+    # Step it the way the frame loop does, so this check hears the real thing.
+    # Long enough for the whole tune (~1.6 s of notes), then stop it clean -
     # 600 ms (the old length) cut the fanfare off mid-run.
-    time.sleep_ms(2200)
+    now = time.ticks_ms()
+    audio.chime(now)
+    deadline = time.ticks_add(now, 2200)
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        audio.tick(time.ticks_ms())
+        time.sleep_ms(20)
     audio.stop()
-    return "the time-is-up fanfare played to the end"
+    return "the time-is-up jingle played to the end"
 
 
 check("play the time-is-up fanfare", play_the_fanfare)

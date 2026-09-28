@@ -372,3 +372,25 @@ def test_poll_failure_still_counts_and_reschedules():
     assert stub._fails_since_ok == 1
     assert "failed:poll" in stub.logs
     assert stub.next_poll_at == 2000
+
+
+def test_poll_path_carries_the_weather_reading():
+    # The page and the tile read the panel's own weather off the wire, so the
+    # two cannot disagree with what is on the display.
+    path = remote.poll_path(_report(temp_c=15, condition="cloud"), "tok")
+    assert "temp_c=15" in path
+    assert "condition=cloud" in path
+
+
+def test_poll_path_carries_a_below_zero_temperature():
+    path = remote.poll_path(_report(temp_c=-3, condition="snow"), "tok")
+    assert "temp_c=-3" in path
+    assert "condition=snow" in path
+
+
+def test_poll_path_omits_the_weather_when_there_is_no_reading():
+    # No reading is not a failure: the poll is still valid and simply carries
+    # no weather, which the page renders as no glyph.
+    path = remote.poll_path(_report(), "tok")
+    assert "temp_c=" not in path
+    assert "condition=" not in path

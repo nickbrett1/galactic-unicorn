@@ -154,6 +154,17 @@ def poll_path(report, token):
     # console to see. Values come from the board, not from input.
     if "reset_cause" in report:
         parts.append("reset_cause=" + str(report["reset_cause"]))
+    # The idle screen's weather (lib/weather.py), relayed verbatim: the remote
+    # page and the Homepage tile draw the same indicator from these two rather
+    # than each asking a weather API themselves, which would let the page and
+    # the panel disagree. Sent only when the board has a reading - an absent
+    # pair is how the service is told "no glyph", and is not a failure. The
+    # condition is one of a small fixed set (lib/weather.py classify); the
+    # service rejects anything else, so only known names go on the wire.
+    if "temp_c" in report:
+        parts.append("temp_c=" + str(report["temp_c"]))
+    if "condition" in report:
+        parts.append("condition=" + str(report["condition"]))
     return "/device/poll?" + "&".join(parts)
 
 
@@ -411,6 +422,12 @@ class Remote:
         self.log = log
         self.fw = fw
         self._feed = feed or _default_feed
+        # The idle screen's weather (lib/weather.py), attached by main.py after
+        # BOTH exist. None (or a weather that has not got a reading) is normal:
+        # the poll simply carries no temp_c/condition and the page shows no
+        # glyph. This module never imports weather - it reads the two
+        # attributes it needs off whatever object it is handed.
+        self.weather = None
 
         self.enabled = bool(getattr(config, "REMOTE_ENABLED", False))
         self.url = getattr(config, "REMOTE_SERVICE_URL", "") or ""
@@ -744,6 +761,16 @@ class Remote:
         # rightly rejects that (observed 2026-09-27: the first poll of every
         # boot got OSError(http 422, detail=uptime_s)), so clamp it to 0.
         uptime_s = max(time.ticks_diff(now, self._started) // 1000, 0)
+        # The idle screen's weather, if the loop handed us one and it has a
+        # reading. `int()`: the service takes a whole degree and the panel
+        # draws a whole degree (lib/weather.py format_temp) - sending the
+        # float would put two decimals on the wire for nothing, and would be a
+        # value the service is right to reject.
+        temp_c = None
+        condition = None
+        if self.weather is not None and getattr(self.weather, "ok", False):
+            temp_c = int(self.weather.temp_c)
+            condition = self.weather.condition
         return reconcile.build_report(
             self.report,
             self.boot,
@@ -756,6 +783,8 @@ class Remote:
             uptime_s,
             wedge=(self.journal.summary() if self.journal is not None else None),
             reset_cause=self.reset_cause,
+            temp_c=temp_c,
+            condition=condition,
         )
 
     def _apply(self, desired, report, now):

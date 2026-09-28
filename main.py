@@ -459,6 +459,17 @@ def main():
     remote_retries = REMOTE_ATTACH_RETRIES if (remote is None and remote_retryable) else 0
     remote_retry_at = time.ticks_ms()
 
+    # Hand the remote the weather the idle screen is showing, so its poll can
+    # report the panel's own reading (lib/remote.py) - the remote page and the
+    # Homepage tile then draw the SAME indicator rather than asking a weather
+    # API themselves and drifting from the panel. Done here, not at
+    # construction, because the remote is built before the weather is; and
+    # again in the retry path below, because a late attach gets the same
+    # treatment as a boot-time one. A weather of None is normal and simply
+    # means the poll carries no temp_c/condition.
+    if remote is not None:
+        remote.weather = weather
+
     # Collect proactively rather than only when an allocation fails: the
     # default (-1) lets the heap run to the wire, and an allocation failure at
     # the wrong moment takes the whole display down (it did - see ambient.py).
@@ -520,6 +531,11 @@ def main():
             remote_retries -= 1
             gc.collect()
             remote, retryable = _attach_remote(engine, config, log, firmware_version())
+            if remote is not None:
+                # Same hand-off as at boot: a remote that finally built must
+                # report the weather too, or a late attach would silently stop
+                # the page updating until the next reset.
+                remote.weather = weather
             if remote is None:
                 if not retryable:
                     remote_retries = 0

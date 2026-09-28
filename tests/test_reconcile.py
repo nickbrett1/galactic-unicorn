@@ -323,3 +323,44 @@ def test_build_report_reuse_clears_the_reset_cause():
     report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", reset_cause=3)
     reconcile.build_report(report, "b1", "0.2.0", 4, "ambient")
     assert "reset_cause" not in report
+
+
+def test_build_report_carries_the_weather_reading():
+    # The idle screen's weather is relayed verbatim so the remote page and the
+    # Homepage tile draw the indicator the panel is drawing, not their own.
+    report = reconcile.build_report(
+        {}, "b1", "0.2.0", 3, "ambient", temp_c=15, condition="cloud")
+    assert report["temp_c"] == 15
+    assert report["condition"] == "cloud"
+
+
+def test_build_report_reports_a_below_zero_temperature():
+    # A negative reading is a value, not "absent" - a reused dict must keep it.
+    report = reconcile.build_report(
+        {}, "b1", "0.2.0", 3, "ambient", temp_c=-3, condition="snow")
+    assert report["temp_c"] == -3
+    assert report["condition"] == "snow"
+
+
+def test_build_report_clears_the_weather_pair_together():
+    # No reading (weather disabled, or it has not landed yet) is "no glyph":
+    # both fields go, so the service never renders a temperature with no
+    # condition behind it. Clearing must survive dict reuse.
+    report = {}
+    reconcile.build_report(
+        report, "b1", "0.2.0", 3, "ambient", temp_c=15, condition="cloud")
+    reconcile.build_report(report, "b1", "0.2.0", 4, "ambient")
+    assert "temp_c" not in report
+    assert "condition" not in report
+
+
+def test_build_report_drops_a_half_supplied_weather_pair():
+    # temp_c without a condition (or the reverse) has no glyph, so neither
+    # field is sent - a partial pair must not reach the wire.
+    only_temp = reconcile.build_report(
+        {}, "b1", "0.2.0", 3, "ambient", temp_c=15)
+    only_condition = reconcile.build_report(
+        {}, "b1", "0.2.0", 3, "ambient", condition="cloud")
+    for report in (only_temp, only_condition):
+        assert "temp_c" not in report
+        assert "condition" not in report

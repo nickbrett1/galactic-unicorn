@@ -44,11 +44,12 @@ WEATHER_RGB = (0, 84, 120)
 # to stay furniture. The rim is kept (it was liked) but is now a quiet grey
 # edge on the flanks rather than the brightest thing in the glyph.
 #
-# The LIT top was dialled down from 205/230/240 (panel ~112) to 170/195/205
-# (panel ~93): at the top of the range the sunlit edge glowed on the wall. It
-# still sits clearly above the body, so the cloud keeps its lit-top read.
+# The LIT top has been dialled down twice: 205/230/240 (panel ~112) -> 170/195/205
+# (panel ~93) -> 150/178/190 (panel ~82). At the top of the range the sunlit
+# edge glowed off the wall as a white glare. It still sits clearly above the
+# body (panel ~74), so the cloud keeps its lit-top read.
 CLOUD_BODY_RGB = (135, 165, 180)
-CLOUD_LIT_RGB = (170, 195, 205)
+CLOUD_LIT_RGB = (150, 178, 190)
 CLOUD_SHADE_RGB = (62, 95, 120)
 CLOUD_RIM_RGB = (95, 100, 108)
 

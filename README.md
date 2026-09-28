@@ -204,8 +204,9 @@ The cloud palette is a **soft blue-grey, not white**. A white body was tried
 and blew out the dark room once `BRIGHTNESS_WEATHER` scales it toward 140; the
 body now lands around 75–100 on the panel — the clearest thing on the idle
 screen, but still furniture. The lit top (`CLOUD_LIT_RGB`) was dialled from
-205/230/240 (panel ~112) down to 170/195/205 (panel ~93) because the sunlit edge
-glowed on the wall; it still sits clearly above the body. The rim was the story
+205/230/240 (panel ~112) down to 170/195/205 (panel ~93) and then to 150/178/190
+(panel ~82) because the sunlit edge still read as a white glare on the wall; it
+still sits clearly above the body. The rim was the story
 of the earlier passes (white → 150 → 110 → 85, each "too bright"); with the tone
 split doing the work, it is now just a quiet edge rather than the brightest
 element.

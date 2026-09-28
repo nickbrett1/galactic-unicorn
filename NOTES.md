@@ -372,7 +372,7 @@ pre-existing, and it kept the current firmware as designed.
   outline - that is why every flat-blue-plus-rim pass still looked like a blob
   or a hill. The glyph now carries four inks:
     'X' body   `CLOUD_BODY_RGB  = (135, 165, 180)`
-    'L' lit    `CLOUD_LIT_RGB   = (170, 195, 205)`  up-facing edges + the row under
+    'L' lit    `CLOUD_LIT_RGB   = (150, 178, 190)`  up-facing edges + the row under
     'S' shade  `CLOUD_SHADE_RGB = (62,  95, 120)`   the underside band
     'O' rim    `CLOUD_RIM_RGB   = (95, 100, 108)`   quiet edge on the flanks
   The body is a soft blue-grey, NOT white: white would blow out the dark room.
@@ -391,6 +391,13 @@ pre-existing, and it kept the current firmware as designed.
   down." `CLOUD_LIT_RGB` 205/230/240 -> 170/195/205 (panel ~112 -> ~93). It
   still sits clearly above the body (panel ~91 vs body ~82), so the lit-top
   read survives; only the glare is gone. Body, shade and rim unchanged.
+
+- W1 update 10 follow-up: "tune down the brightness on the white on the cloud
+  icon, it's a bit too bright" - still about the lit top. `CLOUD_LIT_RGB`
+  170/195/205 -> 150/178/190 (panel ~93 -> ~82). Rendered 170 / 150 / 140 / 130
+  / 122 on the host with the real glyph; 150 keeps the lit-top step fresh while
+  the glare goes, and 140 and below start merging into the body (panel ~74).
+  Body, shade and rim unchanged.
 
 ### W1 update 10 — shading for every icon, and a per-condition palette (2026-09-28)
 

@@ -61,8 +61,9 @@ def test_parse_current_bytes_and_str():
         b'{"latitude":40.71,"current":{"time":"2026-09-28T13:45",'
         b'"temperature_2m":14.3,"weather_code":3}}'
     )
-    assert weather.parse_current(body) == (14, "cloud")
-    assert weather.parse_current(body.decode()) == (14, "cloud")
+    # No is_day in the body -> day (the safe, bright default).
+    assert weather.parse_current(body) == (14, "cloud", True)
+    assert weather.parse_current(body.decode()) == (14, "cloud", True)
 
 
 def test_parse_current_rounds_to_whole_degrees():
@@ -71,18 +72,37 @@ def test_parse_current_rounds_to_whole_degrees():
     assert weather.parse_current('{"current":{"temperature_2m":0}}')[0] == 0
 
 
+def test_parse_current_reads_the_daylight_flag():
+    # is_day rides along in the same body the panel already parses; 0 means the
+    # sun is down, which is what dims the weather after sunset.
+    assert weather.parse_current(
+        '{"current":{"temperature_2m":15.5,"weather_code":2,"is_day":0}}'
+    ) == (16, "partly", False)
+    assert weather.parse_current(
+        '{"current":{"temperature_2m":15.5,"weather_code":2,"is_day":1}}'
+    ) == (16, "partly", True)
+    # Absent, null and nonsense all count as DAY: the flag only ever dims, so
+    # anything unclear must fall on the bright side.
+    for body in (
+        '{"current":{"temperature_2m":7}}',
+        '{"current":{"temperature_2m":7,"is_day":null}}',
+        '{"current":{"temperature_2m":7,"is_day":"nonsense"}}',
+    ):
+        assert weather.parse_current(body)[2] is True
+
+
 def test_parse_current_missing_weather_code_still_gives_a_temperature():
     # Open-Meteo omits a field if it was not asked for; the temperature is the
     # part the panel must keep, with an honest cloud fallback for the sky.
-    assert weather.parse_current('{"current":{"temperature_2m":7.0}}') == (7, "cloud")
+    assert weather.parse_current('{"current":{"temperature_2m":7.0}}') == (7, "cloud", True)
 
 
 def test_parse_current_bad_input_returns_none():
-    assert weather.parse_current(b"") == (None, None)
-    assert weather.parse_current(b"not json") == (None, None)
-    assert weather.parse_current(b"{}") == (None, None)
-    assert weather.parse_current(b'{"current":{}}') == (None, None)
-    assert weather.parse_current(b'{"current":{"temperature_2m":"hot"}}') == (None, None)
+    assert weather.parse_current(b"") == (None, None, None)
+    assert weather.parse_current(b"not json") == (None, None, None)
+    assert weather.parse_current(b"{}") == (None, None, None)
+    assert weather.parse_current(b'{"current":{}}') == (None, None, None)
+    assert weather.parse_current(b'{"current":{"temperature_2m":"hot"}}') == (None, None, None)
 
 
 # -- the panel's temperature text ---------------------------------------------

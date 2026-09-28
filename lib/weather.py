@@ -3,8 +3,8 @@
 Built exactly like lib/remote.py: a PASSIVE poller. main.py owns one instance
 and calls poll_if_due(now) once per render loop; it does nothing until its
 cadence is up, then does at most one bounded fetch and never touches the
-display. The Ambient renderer reads the three attributes it keeps
-(`temp_c`, `condition`, `ok`) and draws them.
+display. The Ambient renderer reads the four attributes it keeps
+(`temp_c`, `condition`, `is_day`, `ok`) and draws them.
 
 WHY PLAIN HTTP: the board cannot complete a TLS handshake (measured 2026-09-26;
 see config.UPDATE_MANIFEST_URL). Open-Meteo answers this request over plain
@@ -93,11 +93,17 @@ def classify(code):
 
 
 def parse_current(body):
-    """(temp_c, condition) from an Open-Meteo body, or (None, None).
+    """(temp_c, condition, is_day) from an Open-Meteo body, or (None, None, None).
 
-    Only the two fields the panel needs are read, and every step is defensive:
-    a wrong host, a truncated body or a changed shape must leave the last good
+    Only the fields the panel needs are read, and every step is defensive: a
+    wrong host, a truncated body or a changed shape must leave the last good
     reading alone (by returning None), never crash the loop.
+
+    `is_day` is the daylight flag the panel uses to dim the weather after
+    sunset (BRIGHTNESS_WEATHER_NIGHT). It is asked for in WEATHER_URL, but any
+    body without it - a host that does not return it, or an older URL - is
+    treated as DAY, so a missing field can only ever leave the panel at its
+    normal brightness, never silently dim it.
     """
     try:
         if isinstance(body, (bytes, bytearray)):
@@ -107,12 +113,24 @@ def parse_current(body):
         raw_temp = current["temperature_2m"]
         code = current.get("weather_code")
     except (ValueError, KeyError, TypeError):
-        return None, None
+        return None, None, None
     try:
         temp = round(float(raw_temp))
     except (TypeError, ValueError):
-        return None, None
-    return temp, classify(code)
+        return None, None, None
+    return temp, classify(code), _is_day(current.get("is_day"))
+
+
+def _is_day(raw):
+    """Open-Meteo's is_day (1 day / 0 night) -> a bool, defaulting to day.
+
+    Anything but a clear 0 counts as day: the flag only ever *dims* the panel,
+    so an absent or odd value must fall on the safe, bright side.
+    """
+    try:
+        return int(raw) != 0
+    except (TypeError, ValueError):
+        return True
 
 
 def format_temp(temp_c):
@@ -175,6 +193,10 @@ class Weather:
         # idle panel shows the clock rather than an empty weather frame.
         self.temp_c = None
         self.condition = None
+        # Daylight flag from the same reading: False after sunset, so the panel
+        # can dim the weather (lib/ambient.py:_weather_brightness). Defaults to
+        # True - a reading that predates this field must not dim the panel.
+        self.is_day = True
         self.ok = False
 
         self._wlan = None
@@ -277,11 +299,12 @@ class Weather:
         )
         if status != 200:
             raise OSError("http " + str(status))
-        temp, condition = parse_current(body)
+        temp, condition, is_day = parse_current(body)
         if temp is None:
             raise ValueError("unparseable weather body")
         self.temp_c = temp
         self.condition = condition
+        self.is_day = is_day
         self.ok = True
         self.log("weather: " + self.reading())
         self._schedule(now, self.poll_ms)

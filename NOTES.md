@@ -553,3 +553,65 @@ Host results: pytest 84 passed; ruff clean; test_sound 18/18; render 5 notes,
   The melody is now scheduled the only way this synth supports, but the ear is
   the judge. Next cable: `scripts/bench-smoke.py` plays it in full.
 - Deployed over the air by the normal release path (board is WiFi-only).
+
+## T3 — task: "dim the weather indicator after sunset" (2026-09-28)
+
+Request, verbatim: *"can we dim the weather indicator after sunset - it feels a
+bit bright when its showing the weather but its dark outside"*.
+
+### The read
+
+The idle weather is drawn at `BRIGHTNESS_WEATHER` (0.55) - 5.5x the furniture
+level (`BRIGHTNESS_AMBIENT` 0.10) - and it is on the panel permanently. 0.55 is
+right for a lit room (it was tuned there: 0.10 was "way too dim"), but at night
+it is a small lamp glowing in a dark room all evening. The whole firmware
+philosophy already says the panel is furniture that must not glow in a bedroom
+(see `ambient.draw_dark`); the weather was simply the one piece exempt from it,
+all day and all night.
+
+### Which "dark"
+
+NOT the phototransistor. `config.LIGHT_DARK` is a poor indoor witness - this
+board reads a steady `light() = 17` against `LIGHT_DARK = 40`, i.e. it calls a
+plainly lit room "dark" (that is the whole reason `AMBIENT_WEATHER_IN_DARK`
+exists). Keying the night dim off the sensor would dim the panel at noon behind
+a cushion.
+
+The sun is the right witness, and the board already asks a source that knows
+it: Open-Meteo returns `is_day` (1 daylight / 0 after sunset) *in the same
+~200-byte `current` response* the board fetches every 15 min. Verified live at
+23:45Z on 2026-09-28 (19:45 EDT): `"is_day":0`. It is the real sunset for the
+latitude, needs no clock and no NTP, and costs one more field in a request that
+is already being made.
+
+### The change
+
+- config.py: `WEATHER_URL` now asks for `is_day`; new `BRIGHTNESS_WEATHER_NIGHT`
+  (0.22), between AMBIENT (0.10) and the daytime weather (0.55).
+- lib/weather.py: `parse_current` returns `(temp_c, condition, is_day)`;
+  `Weather.is_day` holds the flag. A body without the field (or a host that
+  omits it, or an older URL) is DAY - the flag only ever *dims*, so anything
+  unclear must fall on the bright side. `Weather.is_day` defaults to True for
+  the same reason.
+- lib/ambient.py: `_weather_brightness()` is the one choke point both idle
+  paths already share, so the night level applies to the lit-room frame and the
+  dark-room frame alike (`draw` and `draw_dark`). `getattr` fallbacks mean a
+  missing config knob also leaves it bright.
+- tests: `test_weather.py` pins the new tuple shape and the flag's fallbacks;
+  `test_ambient.py` adds `case_night_dims_the_weather` (both paths dim) and
+  `case_a_missing_day_flag_stays_bright` (an object with no `is_day` at all).
+- README.md: the brightness bullet now documents the sunset dim instead of the
+  old "lower it by hand" advice.
+
+Host results: pytest 85 passed (was 84); ruff clean; test_ambient 17/17.
+
+### Not done / still open
+
+- **Not seen on the panel yet.** is_day was 0 at the time of writing, so the
+  next OTA release should visibly dim the idle weather - the ear/eye is the
+  judge, as ever.
+- **The web `WeatherIndicator` (Homepage tile + remote page) is untouched.** The
+  service relays only `temp_c` + `condition`, so it has no day/night signal to
+  act on. If "the weather indicator" was meant to include the page chip, that is
+  a follow-up: relay `is_day` through the poll/state and dim the chip's palette
+  in `$lib/ui/weather.js` / `WeatherIndicator.svelte`.

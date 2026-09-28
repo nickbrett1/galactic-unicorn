@@ -29,9 +29,9 @@ STATUS_RGB = (0, 48, 96)
 # more informative half of the idle screen, and it still stays inside the
 # "furniture, not a screen" dimness of AMBIENT brightness.
 WEATHER_RGB = (0, 84, 120)
-# The cloud is the only SHADED glyph - the pixel-art kind, lit from above with
-# a shadowed underside. Four inks (icons._CLOUD uses 'X' 'L' 'S' 'O'); every
-# other glyph is a single ink and ignores all but WEATHER_RGB.
+# The cloud is the signature SHADED glyph - the pixel-art kind, lit from above
+# with a shadowed underside. Four inks (icons._CLOUD uses 'X' 'L' 'S' 'O'); the
+# shared vocabulary is described once, under WEATHER_PENS below.
 #
 # TONE is what makes a cloud read on a dark panel - not an outline. A single
 # flat blue with a bright rim was tried for several passes and on the wall it
@@ -39,21 +39,23 @@ WEATHER_RGB = (0, 84, 120)
 # it and darker underneath, reads as a cloud at a glance.
 #
 # The body is a soft blue-grey, NOT white: at BRIGHTNESS_WEATHER a white body
-# lands near 140 and blows out the dark room. These land around 75-100 on the
-# panel - bright enough to be the clearest thing on the idle screen, dim enough
-# to stay furniture. The rim is kept (it was liked) but is now a quiet grey
-# edge on the flanks rather than the brightest thing in the glyph.
+# landed near 140 and blew out the dark room. The cloud palette now lands
+# around 60-90 on the panel - bright enough to be the clearest thing on the
+# idle screen, dim enough to stay furniture. The rim is kept (it was liked) but
+# is now a quiet grey edge on the flanks rather than the brightest thing in the
+# glyph.
 #
-# The LIT top has been dialled down repeatedly: 205/230/240 (panel ~112) ->
-# 170/195/205 (panel ~93) -> 150/178/190 (panel ~82) -> 140/170/187 (panel ~77).
-# Each pass was "still too much glare on the wall". The reds and greens come
-# down hardest, so what is left is a cooler, bluer highlight rather than white.
-# It still sits above the body (panel ~74) - go much below this and the lit top
-# only differs in the blue channel, i.e. the step stops reading.
-CLOUD_BODY_RGB = (135, 165, 180)
-CLOUD_LIT_RGB = (140, 170, 187)
-CLOUD_SHADE_RGB = (62, 95, 120)
-CLOUD_RIM_RGB = (95, 100, 108)
+# The LIT top has been dialled down repeatedly, and then the whole glyph with
+# it. Lit alone: 205/230/240 (panel ~112) -> 170/195/205 (~93) -> 150/178/190
+# (~82) -> 140/170/187 (~77). Each pass drew the same "still too much glare",
+# and dimming the lit any further just closes the gap to the body until the step
+# is no longer a brightness cue at all. So the last pass scales the WHOLE cloud
+# to ~0.88 - body, lit, shade and rim together - which takes the glare off
+# without flattening the lit-top read.
+CLOUD_BODY_RGB = (119, 145, 158)
+CLOUD_LIT_RGB = (123, 150, 165)
+CLOUD_SHADE_RGB = (55, 84, 106)
+CLOUD_RIM_RGB = (84, 88, 95)
 
 # One palette per condition: (body, lit, shade, accent). Every weather glyph is
 # shaded the same way ('X' body, 'L' lit top, 'S' shade), and 'O' is the ACCENT

@@ -371,12 +371,14 @@ pre-existing, and it kept the current firmware as designed.
 - INK. This is the real fix. On a dark panel a cloud reads by TONE, not by an
   outline - that is why every flat-blue-plus-rim pass still looked like a blob
   or a hill. The glyph now carries four inks:
-    'X' body   `CLOUD_BODY_RGB  = (135, 165, 180)`
-    'L' lit    `CLOUD_LIT_RGB   = (140, 170, 187)`  up-facing edges + the row under
-    'S' shade  `CLOUD_SHADE_RGB = (62,  95, 120)`   the underside band
-    'O' rim    `CLOUD_RIM_RGB   = (95, 100, 108)`   quiet edge on the flanks
+    'X' body   `CLOUD_BODY_RGB  = (119, 145, 158)`
+    'L' lit    `CLOUD_LIT_RGB   = (123, 150, 165)`  up-facing edges + the row under
+    'S' shade  `CLOUD_SHADE_RGB = (55,  84, 106)`   the underside band
+    'O' rim    `CLOUD_RIM_RGB   = (84,  88,  95)`   quiet edge on the flanks
+  (Values as of update 10 follow-up 3, after the whole cloud was scaled to
+  ~0.88; see the follow-ups below for how they got here.)
   The body is a soft blue-grey, NOT white: white would blow out the dark room.
-  All three extra inks land only on `cloud`; everything else stays single-ink.
+  Every glyph is shaded this way; the cloud keeps the extra rim ink.
 - `icons._draw_frame` now paints a pen per ink symbol (each falling back to the
   body pen), so the extra inks cost nothing on the single-ink glyphs.
 - Picked the shape and palette by rendering candidates to PNG on the host
@@ -406,6 +408,15 @@ pre-existing, and it kept the current firmware as designed.
   highlight rather than white. 134 and below still shows a step in the render
   but only in the blue channel (panel ~73 vs body ~74 in red), i.e. it stops
   reading as a *brightness* cue. Body, shade and rim unchanged.
+
+- W1 update 10 follow-up 3: "ok - it's still a touch hot." Rather than dim the
+  lit again (which only closes the gap to the body), the WHOLE cloud is scaled
+  to ~0.88: body 135/165/180 -> 119/145/158, lit 140/170/187 -> 123/150/165,
+  shade 62/95/120 -> 55/84/106, rim 95/100/108 -> 84/88/95. Panel highs go
+  ~77 -> ~67 and the underside ~52 -> ~46, so the cloud drops back to being
+  furniture while keeping the same lit/mid/shade structure. Rendered 1.00 /
+  0.93 / 0.88 / 0.83 / 0.78 with the real glyph before picking 0.88; the
+  relative contrast is unchanged at every factor, only the level moves.
 
 ### W1 update 10 — shading for every icon, and a per-condition palette (2026-09-28)
 

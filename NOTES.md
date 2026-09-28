@@ -443,3 +443,14 @@ pre-existing, and it kept the current firmware as designed.
   detail test now checks cloud and rain each draw with their own palette.
 - `scripts/rescue-usb.py` (previously untracked) linted: `ruff check .` is
   clean again, so CI's `ruff check .` no longer breaks on it.
+
+- Follow-up 4: "how can I see the rest?" - the other six glyphs. Added
+  `scripts/preview-icons.py`, a DEVICE-side script (`mpremote run`) that paints
+  all seven conditions in turn with the real palettes / brightness, then soft
+  resets back to main.py. Two things it has to do that are easy to miss:
+  mirror `_draw_weather`'s centring (icon + digits as one group) rather than
+  reimplementing an approximation, and FEED THE WATCHDOG - main.py is the thing
+  that normally does, and it is not running, so without `watchdog.feed()` the
+  ~8 s fuse resets the board about three conditions in (measured: died between
+  cloud and fog). Also rendered the whole set to a host PNG through a fake
+  display, which is the cheaper loop when there is no board to hand.

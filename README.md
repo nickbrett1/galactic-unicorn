@@ -217,6 +217,27 @@ three streams of drops falling through it (`_rain_frame`, cycled on
 `icons.WEATHER_FRAME_MS` = 300 ms). A still frame of drops-on-a-cloud did not
 read as rain on the wall.
 
+### Seeing the glyphs
+
+The condition comes from Open-Meteo, so the panel only ever shows the one the
+weather actually is — there is no "show me rain". To look at the whole set on
+the real panel:
+
+```sh
+.venv/bin/mpremote connect /dev/tty.<board> run scripts/preview-icons.py
+```
+
+It paints all seven in turn at the idle screen's own palettes and brightness,
+then soft-resets so `main.py` takes the panel back (you do not have to restart
+it). Pass a condition to hold just that one — `run scripts/preview-icons.py
+rain`. Note it feeds the watchdog while it runs, because `main.py` is the thing
+that normally does and it is not running: without that the ~8 s fuse resets the
+board partway through the set.
+
+For a render that needs no board at all, `tests/`-style host scripts can
+compose the same frames through a fake display (that is how the palettes above
+were chosen).
+
 ## Linting firmware
 
 Firmware is linted with `ruff check .`, which covers the

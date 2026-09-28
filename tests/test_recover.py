@@ -37,7 +37,13 @@ import updater
 
 
 def lay_out_tree(
-    tmp, boot_ok, boot_try, version="0.2.0", prev_version="0.1.10", boot_fails=None
+    tmp,
+    boot_ok,
+    boot_try,
+    version="0.2.0",
+    prev_version="0.1.10",
+    boot_fails=None,
+    boot_wdt=None,
 ):
     """A board-ish tree: a running release plus the rollback slot that judges it."""
     shutil.rmtree(tmp, ignore_errors=True)
@@ -54,6 +60,9 @@ def lay_out_tree(
     if boot_fails is not None:
         with open(updater.BOOT_FAILS_FILE, "w") as fh:
             fh.write(str(boot_fails))
+    if boot_wdt is not None:
+        with open(updater.BOOT_WDT_FILE, "w") as fh:
+            fh.write(str(boot_wdt))
 
     # The rollback copy, hashed exactly as the board would have written it -
     # _rollback verifies every hash before it moves anything.
@@ -272,6 +281,124 @@ def case_late_proof_keeps_release():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_wdt_boot_does_not_spend_a_fail():
+    """A watchdog-cut predecessor must NOT charge the release a boot-fails boot.
+
+    This is the field bug (2026-09-27): machine.reset_cause() == 3 means the
+    PREVIOUS boot was killed by the WDT latch, not by the release failing to
+    prove itself - a reset can land between _mark_attempt and main.py's boot-ok
+    write, and 0.1.38 reached 2 of 3 fails purely from those. Here the release
+    already sits at 2 fails; a WDT boot must leave that exactly where it was.
+    """
+    tmp = tempfile.mkdtemp()
+    saved = updater._reset_cause
+    try:
+        lay_out_tree(tmp, "0.1.10", "0.2.0", boot_fails=2)
+        updater._reset_cause = lambda: updater.RESET_CAUSE_WDT
+        updater._mark_attempt()
+        fails = state(updater.BOOT_FAILS_FILE)
+        ok = fails == "2"
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'WDT-cut boot does not spend a boot-fail':<46} "
+            f"boot-fails={fails!s:<4} want=2"
+        )
+        return ok
+    finally:
+        updater._reset_cause = saved
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_wdt_boot_bumps_wdt_counter():
+    """... it is counted in the separate boot-wdt counter instead."""
+    tmp = tempfile.mkdtemp()
+    saved = updater._reset_cause
+    try:
+        lay_out_tree(tmp, "0.1.10", "0.2.0", boot_fails=2, boot_wdt=1)
+        updater._reset_cause = lambda: updater.RESET_CAUSE_WDT
+        updater._mark_attempt()
+        wdt = state(updater.BOOT_WDT_FILE)
+        fails = state(updater.BOOT_FAILS_FILE)
+        ok = wdt == "2" and fails == "2"
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'WDT-cut boot bumps boot-wdt alone':<46} "
+            f"boot-wdt={wdt!s:<4} boot-fails={fails!s:<4} want=2/2"
+        )
+        return ok
+    finally:
+        updater._reset_cause = saved
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_ordinary_boot_still_spends_a_fail():
+    """An ordinary unproven boot must count exactly as it always did.
+
+    The whole mechanism exists for this case, so the WDT carve-out must not
+    touch it: a boot that was NOT watchdog-cut still increments boot-fails, and
+    must not touch boot-wdt.
+    """
+    tmp = tempfile.mkdtemp()
+    saved = updater._reset_cause
+    try:
+        lay_out_tree(tmp, "0.1.10", "0.2.0", boot_fails=1)
+        updater._reset_cause = lambda: None  # not RESET_CAUSE_WDT
+        updater._mark_attempt()
+        fails = state(updater.BOOT_FAILS_FILE)
+        wdt = state(updater.BOOT_WDT_FILE)
+        ok = fails == "2" and wdt is None
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'ordinary unproven boot still spends a fail':<46} "
+            f"boot-fails={fails!s:<4} want=2"
+        )
+        return ok
+    finally:
+        updater._reset_cause = saved
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_wdt_hang_still_rolls_back():
+    """The trap: a HANG is also a WDT reset, so it must still roll back.
+
+    A release that wedges is reset by the watchdog every boot, exactly like a
+    release cut down by infrastructure. If WDT resets were ignored outright, a
+    hanging release would never roll back - an infinite reboot loop, strictly
+    worse than the original bug. So boot-wdt has its own, higher ceiling, and
+    _recover rolls back when it is reached. Driven through the real pair
+    (recover then mark_attempt) with every boot WDT-cut and no boot-ok.
+    """
+    tmp = tempfile.mkdtemp()
+    saved = updater._reset_cause
+    try:
+        lay_out_tree(tmp, "0.1.10", None)
+        updater._reset_cause = lambda: updater.RESET_CAUSE_WDT
+        rolled_at = None
+        for boot in range(1, updater.BOOT_WDT_MAX + 3):
+            if updater._recover():
+                rolled_at = boot
+                break
+            updater._mark_attempt()
+        want = updater.BOOT_WDT_MAX + 1
+        ok = rolled_at == want
+        ok = ok and state(updater.VERSION_FILE) == "0.1.10"
+        ok = ok and not os.path.exists(updater.BOOT_WDT_FILE)
+        ok = ok and not os.path.exists(updater.BOOT_FAILS_FILE)
+        verdict = "PASS" if ok else "FAIL"
+        print(
+            f"{verdict:<4} {'a WDT hang still rolls back at WDT_MAX+1':<46} "
+            f"rolled_at={rolled_at} want={want}"
+        )
+        return ok
+    finally:
+        updater._reset_cause = saved
+        os.chdir("/")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     results = [
         # Proven before: nothing to do, and boot-try is retired.
@@ -296,6 +423,12 @@ def main():
         case_no_blacklist(),
         case_release_gets_several_boots(),
         case_late_proof_keeps_release(),
+        # A watchdog reset is infrastructure, not a verdict; but a WDT hang is
+        # still a verdict, just a later one.
+        case_wdt_boot_does_not_spend_a_fail(),
+        case_wdt_boot_bumps_wdt_counter(),
+        case_ordinary_boot_still_spends_a_fail(),
+        case_wdt_hang_still_rolls_back(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} passed")

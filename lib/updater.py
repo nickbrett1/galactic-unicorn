@@ -128,6 +128,7 @@ MAX_PACK_BYTES = 512 * 1024
 #   boot-ok.txt     the release that has PROVEN it comes up (written by main.py)
 #   boot-try.txt    the release whose boot chances are being spent right now
 #   boot-fails.txt  how many judged boots that release has spent, still unproven
+#   boot-wdt.txt    how many of those boots were cut short by the watchdog
 #   prev.json       what the rollback copy is: {version, files, managed}
 #
 # A release is NOT discarded on one bad boot. It gets BOOT_FAILS_MAX boots that
@@ -145,7 +146,26 @@ APPLYING_FILE = "applying.txt"
 BOOT_OK_FILE = "boot-ok.txt"
 BOOT_TRY_FILE = "boot-try.txt"
 BOOT_FAILS_FILE = "boot-fails.txt"
+# A boot that ends without boot-ok is not always the release's fault. If the
+# board was cut down from underneath it - a watchdog latch landing between
+# _mark_attempt and main.py's boot-ok write - then the release never got the
+# chance it was being charged for. Measured in the field 2026-09-27: release
+# 0.1.38 reached 2 of 3 fails purely from watchdog resets, and one more would
+# have rolled back a working release. machine.reset_cause(), read at the top of
+# a boot, says how the PREVIOUS boot ended; cause 3 is the RP2040's WDT latch
+# (the same test lib/watchdog.reset_was_watchdog makes). Those boots are counted
+# separately instead, under a higher ceiling.
 BOOT_FAILS_MAX = 3
+RESET_CAUSE_WDT = 3
+# The watchdog counter. It is HIGHER than BOOT_FAILS_MAX on purpose and must
+# stay that way: a release that HANGS is also killed by the watchdog, so if a
+# WDT reset never counted at all a genuinely broken release would never roll
+# back - an infinite reboot loop, strictly worse than the bug being fixed. The
+# watchdog path therefore still rolls back, just later; 6 gives a working
+# release cut down by incidental resets real headroom while still bounding a
+# hang to a handful of boots.
+BOOT_WDT_FILE = "boot-wdt.txt"
+BOOT_WDT_MAX = 6
 UNKNOWN_VERSION = "dev"
 
 
@@ -229,6 +249,37 @@ def _read_fails():
         return int(_read(BOOT_FAILS_FILE) or 0)
     except ValueError:
         return 0
+
+
+def _read_wdt():
+    """Watchdog-cut boots the pending release has spent. Absent or junk = 0."""
+    try:
+        return int(_read(BOOT_WDT_FILE) or 0)
+    except ValueError:
+        return 0
+
+
+def _reset_cause():
+    """machine.reset_cause(), or None when there is no machine module.
+
+    Read at the top of a boot, this describes how the PREVIOUS boot terminated;
+    RESET_CAUSE_WDT is the watchdog latch (see the constants above). It is a
+    module-level function purely so tests can substitute it: the host running
+    these tests has no `machine` module, so the try/except is also the safe
+    fallback if the call ever fails on a board - both cases read as "not a WDT
+    reset", which is the conservative choice (an ordinary boot is judged exactly
+    as it always was).
+    """
+    try:
+        import machine
+
+        return machine.reset_cause()
+    except Exception:  # noqa: BLE001 - no machine on the host, or a port quirk
+        return None
+
+
+def _is_wdt_reset():
+    return _reset_cause() == RESET_CAUSE_WDT
 
 
 def _local_version():
@@ -449,6 +500,11 @@ def _apply(written, version):
     with open(VERSION_FILE, "w") as fh:
         fh.write(version + "\n")
     _clear(APPLYING_FILE)
+    # A fresh release starts with a clean watchdog slate. boot-fails and
+    # boot-try are reset by _mark_attempt on this release's first boot (boot-try
+    # still names the old release); the WDT counter is cleared here for the same
+    # reason and to make the reset explicit rather than inherited.
+    _clear(BOOT_WDT_FILE)
 
 
 def _reset():
@@ -544,6 +600,7 @@ def _rollback():
     _write(VERSION_FILE, info["version"] or UNKNOWN_VERSION)
     _clear(BOOT_TRY_FILE)
     _clear(BOOT_FAILS_FILE)
+    _clear(BOOT_WDT_FILE)
     _clear(PREV_INFO)
     _clear(APPLYING_FILE)
     _rmtree(PREV_DIR)
@@ -559,10 +616,18 @@ def _recover():
       boot-ok == version        it has come up before; nothing to do
       boot-try != version       not yet judged: this boot is its first chance
       boot-try == version       it has been judged before and still has not
-                                reported in. It gets BOOT_FAILS_MAX boots like
-                                that; only the boot AFTER the last one rolls it
-                                back, so one flaky boot does not discard a
-                                release that would have come up on the next.
+                                reported in. It gets BOOT_FAILS_MAX ordinary
+                                boots like that; only the boot AFTER the last
+                                one rolls it back, so one flaky boot does not
+                                discard a release that would have come up on
+                                the next.
+
+    Those "ordinary" boots are the ones _mark_attempt charges to boot-fails. A
+    boot the watchdog cut down is charged to boot-wdt instead (see
+    _mark_attempt), and it takes BOOT_WDT_MAX of those to roll back - so an
+    infrastructure reset does not spend a chance the release never had, and a
+    release that truly hangs, which the watchdog also resets every boot, is
+    still put back rather than rebooted forever.
 
     The whole thing is gated on a rollback copy existing. That is not just an
     optimisation: it also means the protocol only engages for trees this
@@ -599,6 +664,7 @@ def _recover():
         # fail with OSError(28,), ENOSPC.
         _clear(BOOT_TRY_FILE)
         _clear(BOOT_FAILS_FILE)
+        _clear(BOOT_WDT_FILE)
         _clear(PREV_INFO)
         _rmtree(PREV_DIR)
         return False
@@ -606,15 +672,31 @@ def _recover():
         return False
     if _read(BOOT_TRY_FILE) != version:
         return False  # this release's first boot: judgement is not due yet
-    if _read_fails() < BOOT_FAILS_MAX:
+    # Two counters, two ceilings. boot-fails counts ordinary unproven boots and
+    # rolls back at BOOT_FAILS_MAX, exactly as it always has. boot-wdt counts
+    # boots the watchdog cut short and rolls back only at the higher
+    # BOOT_WDT_MAX - so incidental resets no longer discard a working release,
+    # while a release that genuinely HANGS (which is also a watchdog reset every
+    # boot) is still bounded rather than looping forever.
+    if _read_fails() < BOOT_FAILS_MAX and _read_wdt() < BOOT_WDT_MAX:
         return False  # it still has boots left to prove itself
+    if _read_wdt() >= BOOT_WDT_MAX:
+        reason = (
+            "it did not come up in "
+            + str(BOOT_FAILS_MAX)
+            + " boots and was cut down by the watchdog "
+            + str(BOOT_WDT_MAX)
+            + " times"
+        )
+    else:
+        reason = "it did not come up in " + str(BOOT_FAILS_MAX) + " boots"
     previous = _rollback()
     _log(
         "rolled back from "
         + version
-        + " (it did not come up in "
-        + str(BOOT_FAILS_MAX)
-        + " boots) to "
+        + " ("
+        + reason
+        + ") to "
         + (previous or UNKNOWN_VERSION)
     )
     return True
@@ -690,19 +772,32 @@ def _mark_attempt():
     The boot is COUNTED, not spent all at once: _recover only rolls back once
     this counter has reached BOOT_FAILS_MAX, so a release that fails to prove
     itself on one boot still has the next ones to try.
+
+    A boot that the WATCHDOG cut down is different and is counted differently.
+    machine.reset_cause() at the top of THIS boot reports how the PREVIOUS one
+    ended, and a WDT latch there means the release was killed by something
+    other than its own badness - an infrastructure reset, which may well have
+    landed between this function and main.py's boot-ok write. Charging that to
+    boot-fails is exactly what rolled a working 0.1.38 towards the brink on
+    2026-09-27. So it is charged to boot-wdt instead, whose ceiling is higher.
+    boot-try is still stamped either way, because the release is still being
+    judged; only the counter it is judged against changes.
     """
     version = _read(VERSION_FILE)
     if not version or not _has_rollback():
         return  # protocol not engaged: never judge a tree we cannot put back
     if _read(BOOT_OK_FILE) == version:
         return  # already proven this boot; nothing to count
-    fails = _read_fails()
     if _read(BOOT_TRY_FILE) != version:
-        # First boot of this release: start its counter from zero rather than
+        # First boot of this release: start its counters from zero rather than
         # inheriting whatever an earlier release left behind.
         _write(BOOT_TRY_FILE, version)
-        fails = 0
-    _write(BOOT_FAILS_FILE, str(fails + 1))
+        _write(BOOT_FAILS_FILE, "0")
+        _write(BOOT_WDT_FILE, "0")
+    if _is_wdt_reset():
+        _write(BOOT_WDT_FILE, str(_read_wdt() + 1))
+        return
+    _write(BOOT_FAILS_FILE, str(_read_fails() + 1))
 
 
 def check_for_update(config):

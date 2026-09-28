@@ -148,6 +148,12 @@ def poll_path(report, token):
     # window is joined by the board's account of the same window.
     if "wedge" in report:
         parts.append("wedge=" + str(report["wedge"]))
+    # How the board's PREVIOUS boot ended (machine.reset_cause(), read once at
+    # construction). A second extra parameter the service may ignore: it lets
+    # the service tell a cold start from the WDT latch that used to need a USB
+    # console to see. Values come from the board, not from input.
+    if "reset_cause" in report:
+        parts.append("reset_cause=" + str(report["reset_cause"]))
     return "/device/poll?" + "&".join(parts)
 
 
@@ -301,6 +307,24 @@ def _default_feed():
         pass
 
 
+def _reset_cause():
+    """machine.reset_cause() for THIS boot, or None when unavailable.
+
+    Read once per boot, never per poll: the value is a latch describing how the
+    PREVIOUS boot ended (updater.py makes the same point), so it cannot change
+    while we are running. Carried on the poll so the service can tell a genuine
+    cold start (PWRON_RESET) from a watchdog latch (WDT_RESET = 3) - the
+    distinction that used to need a USB console to see. The port may not expose
+    the call at all, so absence is None, not an error.
+    """
+    try:
+        import machine
+
+        return int(machine.reset_cause())
+    except Exception:  # noqa: BLE001 - no machine module, or no reset_cause on it
+        return None
+
+
 def _rssi(wlan):
     """The station's dBm, or None. The contract wants a non-positive integer."""
     if wlan is None:
@@ -403,6 +427,9 @@ class Remote:
 
         self.boot = _new_boot_id()
         self.applied_gen = _read_gen(self.gen_file)
+        # How the PREVIOUS boot ended (a latch, constant for this session). The
+        # service uses it to see a watchdog reset without a USB console.
+        self.reset_cause = _reset_cause()
 
         # Allocated ONCE and refilled in place every poll (memo 6.3.4): the
         # observed report must not allocate in the reporting path.
@@ -728,6 +755,7 @@ class Remote:
             _rssi(wlan),
             uptime_s,
             wedge=(self.journal.summary() if self.journal is not None else None),
+            reset_cause=self.reset_cause,
         )
 
     def _apply(self, desired, report, now):

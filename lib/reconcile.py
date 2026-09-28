@@ -287,7 +287,8 @@ def decide(desired, applied_gen, panel, now_epoch_s):
 # -- the observed-state report -----------------------------------------------
 
 def build_report(report, boot, fw, applied_gen, state, routine=None,
-                 remaining_s=None, rssi=None, uptime_s=None, wedge=None):
+                 remaining_s=None, rssi=None, uptime_s=None, wedge=None,
+                 reset_cause=None):
     """Fill the observed-state JSON, in place, from one snapshot.
 
     `report` is a caller-owned dict, allocated ONCE and reused on every poll,
@@ -328,5 +329,10 @@ def build_report(report, boot, fw, applied_gen, state, routine=None,
         report.pop("wedge", None)
     else:
         report["wedge"] = wedge
+
+    if reset_cause is None:
+        report.pop("reset_cause", None)
+    else:
+        report["reset_cause"] = reset_cause
 
     return report

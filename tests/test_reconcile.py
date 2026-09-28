@@ -300,3 +300,26 @@ def test_build_report_reuse_clears_routine_but_keeps_rssi():
     }
     assert "routine" not in report
     assert "remaining_s" not in report
+
+
+def test_build_report_carries_the_reset_cause():
+    # How the PREVIOUS boot ended, read once per boot (remote._reset_cause).
+    # Carried so the service can tell a cold start (1, PWRON_RESET) from the
+    # watchdog latch (3, WDT_RESET) - the distinction that used to need a USB
+    # console to see.
+    report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", reset_cause=3)
+    assert report["reset_cause"] == 3
+
+
+def test_build_report_keeps_a_zero_reset_cause():
+    # 0 is a value, not "absent", the same rule as remaining_s and rssi.
+    report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", reset_cause=0)
+    assert report["reset_cause"] == 0
+
+
+def test_build_report_reuse_clears_the_reset_cause():
+    # A port with no reset_cause() reports None, and a reused dict must not
+    # leave the previous boot's latch in place.
+    report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", reset_cause=3)
+    reconcile.build_report(report, "b1", "0.2.0", 4, "ambient")
+    assert "reset_cause" not in report

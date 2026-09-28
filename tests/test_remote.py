@@ -99,6 +99,18 @@ def test_poll_path_includes_routine_and_remaining_when_present():
     assert "uptime_s=3820" in path
 
 
+def test_poll_path_carries_the_reset_cause():
+    # Optional: how the previous boot ended (machine.reset_cause()). The
+    # service may ignore it; it is carried so a WDT latch is visible remotely.
+    path = remote.poll_path(_report(reset_cause=3), "tok")
+    assert "reset_cause=3" in path
+
+
+def test_poll_path_omits_the_reset_cause_when_unknown():
+    # The port may not expose reset_cause() at all - the parameter is optional.
+    assert "reset_cause=" not in remote.poll_path(_report(), "tok")
+
+
 # -- the response split --------------------------------------------------------
 
 def test_split_response_reads_status_and_body():

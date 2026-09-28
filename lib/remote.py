@@ -184,9 +184,13 @@ def recovery_is_available(failed_cycles, max_cycles, since_last_ms, cooldown_ms)
     """
     if max_cycles and max_cycles > 0 and failed_cycles >= max_cycles:
         return False
-    if cooldown_ms and cooldown_ms > 0 and since_last_ms is not None:
-        if since_last_ms < cooldown_ms:
-            return False
+    if (
+        cooldown_ms
+        and cooldown_ms > 0
+        and since_last_ms is not None
+        and since_last_ms < cooldown_ms
+    ):
+        return False
     return True
 
 
@@ -555,18 +559,20 @@ class Remote:
             self._fails_since_ok = 0
             return
         self._fails_since_ok += 1
-        if should_cycle_radio(self._fails_since_ok, self.radio_reset_after):
-            if self._recovery_available():
-                self._cycle_radio()
-            elif not self._spent_warned:
-                self._spent_warned = True
-                self._net_log(
-                    "the radio cycle has been spent ("
-                    + str(self._failed_cycles)
-                    + " failed"
-                    + (", within the cool-down" if self._failed_cycles == 0 else "")
-                    + ") - polling on without it"
-                )
+        if not should_cycle_radio(self._fails_since_ok, self.radio_reset_after):
+            return
+        if self._recovery_available():
+            self._cycle_radio()
+            return
+        if not self._spent_warned:
+            self._spent_warned = True
+            self._net_log(
+                "the radio cycle has been spent ("
+                + str(self._failed_cycles)
+                + " failed"
+                + (", within the cool-down" if self._failed_cycles == 0 else "")
+                + ") - polling on without it"
+            )
 
     def _recovery_available(self):
         """Is a cycle still allowed? (policy in recovery_is_available)."""

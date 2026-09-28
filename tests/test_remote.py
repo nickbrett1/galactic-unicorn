@@ -263,8 +263,11 @@ def test_note_failure_does_not_count_a_down_link():
         def isconnected(self):
             return False
 
-    stub = _FailureStub(fails=2)
-    stub._radio = lambda: _DownWlan()
+    class _DownStub(_FailureStub):
+        def _radio(self):
+            return _DownWlan()
+
+    stub = _DownStub(fails=2)
     remote.Remote._note_failure(stub)
     assert stub.cycles == 0
     # An honestly-down link is join_wifi's problem, not the wedge's.

@@ -184,14 +184,12 @@ def recovery_is_available(failed_cycles, max_cycles, since_last_ms, cooldown_ms)
     """
     if max_cycles and max_cycles > 0 and failed_cycles >= max_cycles:
         return False
-    if (
+    return not (
         cooldown_ms
         and cooldown_ms > 0
         and since_last_ms is not None
         and since_last_ms < cooldown_ms
-    ):
-        return False
-    return True
+    )
 
 
 # Below this much free memory, an ENOMEM is taken to be a heap shortfall.

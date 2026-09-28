@@ -25,8 +25,10 @@ not assumed:
                        length-prefixed records (see scripts/build-firmware-pack.py)
   * a ~47 KB body read whole raises MemoryError even with 126 KB free - a
                     single contiguous allocation failure. So the pack is
-                    STREAMED straight into the file through a sink (net.http_get
-                    with `sink`), never held whole.
+                    STREAMED straight into the tree through a sink (net.http_get
+                    with `sink`): never held whole, and never resident on flash
+                    either - see _PackSink for the second half, which is what
+                    makes a full release fit at all.
   * hashlib.sha256 has no hexdigest() -> ubinascii.hexlify(h.digest())
   * `import os` does NOT bind os.path -> never use os.path here. A stray
     os.path.exists once ran after a successful apply and got reported as a
@@ -79,9 +81,13 @@ except ImportError:  # a tree without lib/watchdog.py: no fuse to feed
         pass
 
 VERSION_FILE = "version.txt"
+# Kept, and still swept, but nothing writes it any more: the pack is staged
+# straight into :next/ now (_PackSink). An older firmware can leave one behind,
+# and on this board's 768 KB flash a single leftover 191 KB pack is enough to
+# turn one ENOSPC into a permanent failure loop - which is exactly what was
+# measured, so _cleanup still removes it.
 PACK_PATH = ":incoming.pack"
 NEXT_DIR = ":next"
-CHUNK = 1024
 # Hashing (a pack file, a rollback copy, the live tree) streams through this, so
 # no step ever holds a whole file: on this board the heap is ~126 KB and the
 # biggest managed file is ~30 KB, but it is the ALLOCATION that matters, not the
@@ -325,36 +331,6 @@ def _fetch(url, timeout_s, limit=MANIFEST_LIMIT):
     return body.decode()
 
 
-def _download(url, dest, expect_sha, timeout_s, limit=MAX_PACK_BYTES):
-    """Stream url into dest, hashing as we go. Returns the size.
-
-    Streamed through a `sink`, so the pack is never held whole - this board's
-    heap is ~126 KB and a single 47 KB read already fails. The sha256 is checked
-    against the manifest's value before the caller is allowed to touch the
-    staged file, so a truncated or corrupt transfer cannot reach the live tree.
-    """
-    import hashlib
-
-    host, port, path = net.split_url(url)
-    if host is None:
-        raise ValueError("update url is not plain http: " + url)
-    digest = hashlib.sha256()
-
-    def sink(data):
-        fh.write(data)
-        digest.update(data)
-
-    with open(dest, "wb") as fh:
-        status, total = net.http_get(
-            host, port, path, timeout_s, feed=_wdt_feed, sink=sink, read_cap=limit
-        )
-    if status != 200:
-        raise OSError("http " + str(status))
-    if _hexdigest(digest) != expect_sha:
-        raise ValueError("pack sha256 mismatch")
-    return total
-
-
 def _mkdirs(path):
     parts = path.split("/")
     cur = ""
@@ -385,48 +361,189 @@ def _rmtree(path):
         pass
 
 
-def _unpack(files):
-    """Split PACK_PATH into NEXT_DIR/, hashing and checking every file.
+class _PackSink:
+    """Turn the streamed pack body into files under :next/, verifying as it goes.
 
-    Nothing here touches a live file: a corrupt or truncated pack fails while
-    everything is still in :next, so the running firmware is never half-written.
+    The pack is never resident on flash, and that is the whole reason this class
+    exists. The old shape downloaded it whole to PACK_PATH and unpacked it
+    afterwards, so the peak of an update was live + pack + :next at once: 57 +
+    47 + 47 blocks of this board's 192, i.e. 94 of the 98 blocks that were free.
+    Four blocks is not enough headroom for the littlefs metadata commits that
+    writing :next still needs, and it was not theoretical - measured
+    2026-09-28, every check of the 0.1.41 release (191289 B pack carrying
+    190934 B of files) died in _unpack with OSError(28), ENOSPC, while the same
+    release with a one-file pack applied fine. Streaming the body straight into
+    :next removes the pack from the peak, and the pack was always the one part
+    that is re-downloadable.
+
+    Integrity is unchanged, and so is the ordering that matters:
+
+      * the pack's own sha256 is still checked against the manifest, at the end
+        rather than the start because the body is only complete then. Failing
+        there costs a wasted download, not a broken board.
+      * every file's sha256 is still checked against the manifest before _apply
+        is allowed to adopt :next/, and the manifest's file LIST is still
+        compared to what the pack actually carried, so a pack cannot drop a
+        file and pass.
+      * nothing here touches a live file. A stream that fails, truncates or
+        verifies wrong leaves a partial :next/, never a half-written tree, and
+        the caller's _cleanup removes it.
+
+    `feed` is a state machine over the length-prefixed records rather than a
+    loop over a buffer, because the body arrives in 256-byte reads and a record
+    is up to ~30 KB - the whole point is to not accumulate one.
     """
-    import hashlib
 
-    expected = {entry["path"]: entry["sha256"] for entry in files}
-    seen = set()
-    written = []
-    with open(PACK_PATH, "rb") as fh:
+    PATH_LEN = 0
+    PATH = 1
+    DATA_LEN = 2
+    DATA = 3
+
+    def __init__(self, files):
+        import hashlib
+
+        self._expected = {entry["path"]: entry["sha256"] for entry in files}
+        self._seen = set()
+        self._written = []
+        self._pack = hashlib.sha256()
+        self._buf = b""
+        self._state = self.PATH_LEN
+        self._path_len = 0
+        self._path = None
+        self._remaining = 0
+        self._out = None
+        self._file = None
+
+    def feed(self, data):
+        """One body slice from net.http_get's sink. Raises on a corrupt pack."""
+        try:
+            self._consume(data)
+        except Exception:
+            self.close()
+            raise
+
+    def _consume(self, data):
+        import hashlib
+
+        self._pack.update(data)
+        self._buf += data
         while True:
-            header = fh.read(4)
-            if not header:
-                break
-            if len(header) != 4:
-                raise ValueError("truncated pack (path length)")
-            path = fh.read(struct.unpack(">I", header)[0]).decode()
-            header = fh.read(4)
-            if len(header) != 4:
-                raise ValueError("truncated pack (data length)")
-            remaining = struct.unpack(">I", header)[0]
-            dest = NEXT_DIR + "/" + path
-            _mkdirs(dest)
-            digest = hashlib.sha256()
-            with open(dest, "wb") as out:
-                while remaining > 0:
-                    _wdt_feed()
-                    chunk = fh.read(min(CHUNK, remaining))
-                    if not chunk:
-                        raise ValueError("truncated pack (data)")
-                    out.write(chunk)
-                    digest.update(chunk)
-                    remaining -= len(chunk)
-            if expected.get(path) != _hexdigest(digest):
-                raise ValueError("sha256 mismatch for " + path)
-            seen.add(path)
-            written.append(path)
-    if seen != set(expected):
-        raise ValueError("pack does not match the manifest's file list")
-    return written
+            _wdt_feed()
+            if self._state == self.PATH_LEN:
+                if len(self._buf) < 4:
+                    return
+                self._path_len = struct.unpack(">I", self._buf[:4])[0]
+                self._buf = self._buf[4:]
+                self._state = self.PATH
+            elif self._state == self.PATH:
+                if len(self._buf) < self._path_len:
+                    return
+                self._path = self._buf[: self._path_len].decode()
+                self._buf = self._buf[self._path_len:]
+                self._state = self.DATA_LEN
+            elif self._state == self.DATA_LEN:
+                if len(self._buf) < 4:
+                    return
+                self._remaining = struct.unpack(">I", self._buf[:4])[0]
+                self._buf = self._buf[4:]
+                dest = NEXT_DIR + "/" + self._path
+                _mkdirs(dest)
+                self._out = open(dest, "wb")
+                self._file = hashlib.sha256()
+                self._state = self.DATA
+                if self._remaining == 0:
+                    self._close_file()
+            else:  # DATA
+                if not self._buf:
+                    if self._remaining == 0:
+                        self._close_file()
+                    return
+                take = min(len(self._buf), self._remaining)
+                piece = self._buf[:take]
+                self._buf = self._buf[take:]
+                self._out.write(piece)
+                self._file.update(piece)
+                self._remaining -= take
+                if self._remaining == 0:
+                    self._close_file()
+
+    def _close_file(self):
+        """Finish one record: verify it against the manifest, then move on."""
+        self._out.close()
+        self._out = None
+        if self._expected.get(self._path) != _hexdigest(self._file):
+            raise ValueError("sha256 mismatch for " + self._path)
+        self._seen.add(self._path)
+        self._written.append(self._path)
+        self._file = None
+        self._path = None
+        self._state = self.PATH_LEN
+
+    def close(self):
+        """Release the open output file, if any. Safe to call twice."""
+        if self._out is not None:
+            try:
+                self._out.close()
+            except OSError:
+                pass
+            self._out = None
+
+    def finish(self, expect_sha):
+        """The body is complete: verify the pack, and that it carried every file.
+
+        Returns the staged paths, in pack order, for _apply. Everything checked
+        here is still in :next/ - nothing has touched the live tree.
+        """
+        if self._state != self.PATH_LEN or self._out is not None:
+            self.close()
+            raise ValueError("truncated pack")
+        if _hexdigest(self._pack) != expect_sha:
+            raise ValueError("pack sha256 mismatch")
+        if self._seen != set(self._expected):
+            raise ValueError("pack does not match the manifest's file list")
+        return self._written
+
+
+def _stage(url, files, expect_sha, timeout_s, limit=MAX_PACK_BYTES):
+    """Stream the pack into :next/, checking it as it arrives. Returns (paths, bytes).
+
+    Replaces the old _download + _unpack pair. The transfer is still bounded
+    (`read_cap` caps the body, `timeout_s` caps every socket call), and it still
+    feeds the fuse throughout, so this remains safe to run under the app's
+    watchdog from the render loop.
+    """
+    host, port, path = net.split_url(url)
+    if host is None:
+        raise ValueError("update url is not plain http: " + url)
+    sink = _PackSink(files)
+    failure = []
+
+    def take(data):
+        # Never raise from inside the socket loop. A non-200 carries a body too
+        # (an error page), and letting the sink's parser fail on that would put
+        # "truncated pack" in update.log when the server actually said 500 -
+        # this codebase has lost sessions to exactly that kind of misdirection.
+        # So the body is drained, the status is checked first, and only then is
+        # the sink's own verdict raised. The drain is bounded by `read_cap`.
+        if failure:
+            return
+        try:
+            sink.feed(data)
+        except Exception as exc:  # noqa: BLE001 - re-raised just below
+            failure.append(exc)
+
+    try:
+        status, total = net.http_get(
+            host, port, path, timeout_s, feed=_wdt_feed, sink=take, read_cap=limit
+        )
+    except Exception:
+        sink.close()
+        raise
+    if status != 200:
+        raise OSError("http " + str(status))
+    if failure:
+        raise failure[0]
+    return sink.finish(expect_sha), total
 
 
 def _cleanup():
@@ -725,22 +842,20 @@ def _update(config):
         _log("no update: " + version + " is already running")
         return False
     pack = manifest["pack"]
-    size = _download(
-        base + "/" + pack["file"], PACK_PATH, pack["sha256"], timeout_s
+    # Fetched straight into :next/ - the pack never lands on flash, so the peak
+    # is :prev + :next rather than :prev + :next + pack. That is the difference
+    # between 94 of this board's 98 free blocks and 47 of them, and the smaller
+    # number is what makes a full 17-file release fit at all (_PackSink has the
+    # measurement). Note the pack's sha256 is verified once the body is
+    # complete, i.e. after :next/ has been written - safe, because :next is
+    # discarded on any failure and the live tree is still untouched.
+    written, size = _stage(
+        base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
     )
-    written = _unpack(manifest["files"])
-    # The pack has done its job. Every file it carried is verified into :next/
-    # and nothing below reads it again, so drop it BEFORE the rollback copy is
-    # taken. That point is the peak of the update's flash use: :prev, :next and
-    # the pack are all resident at once, and on 2026-09-27 the update failed
-    # there with OSError(28,), ENOSPC - the pack is a third of the peak and is
-    # the one part that is re-downloadable. :next is the only staged copy the
-    # apply needs (and _cleanup still sweeps both).
-    _clear(PACK_PATH)
-    # Only now - new pack downloaded, every file verified in :next/ - record the
-    # rollback plan for the tree we are about to replace. Nothing is copied:
-    # _apply moves each replaced file into :prev as it goes, so :next and :prev
-    # are never both fully resident (see _plan_rollback and _apply).
+    # Every file is verified in :next/ - now record the rollback plan for the
+    # tree we are about to replace. Nothing is copied: _apply moves each
+    # replaced file into :prev as it goes, so :next and :prev are never both
+    # fully resident (see _plan_rollback and _apply).
     _plan_rollback(current or UNKNOWN_VERSION, [e["path"] for e in manifest["files"]])
     _apply(written, version)
     _log(

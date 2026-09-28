@@ -7,9 +7,11 @@ This is the seam that changed on 2026-09-26: the updater used to pull the
 manifest and pack from GitHub over HTTPS, which this board cannot do (see
 config.UPDATE_MANIFEST_URL), and now pulls them over plain HTTP from the LAN
 service through `net.http_get` - a bounded raw socket. These tests drive
-`_fetch`, `_download` and a whole `_update` against a real local HTTP server,
-so the pack format, the sha256 checks and the "version.txt is written LAST"
-rule are all exercised without hardware.
+`_fetch`, `_stage` and a whole `_update` against a real local HTTP server, so
+the pack format, the sha256 checks and the "version.txt is written LAST" rule
+are all exercised without hardware. `_stage` replaced `_download`/`_unpack` on
+2026-09-28: the pack is streamed straight into :next/ and never written to
+flash, which is what lets a full 17-file release fit on the board at all.
 
 `_update` is driven in a temporary working directory with the device files
 redirected into it, because it is meant to write to the board's flash root.
@@ -110,27 +112,121 @@ def case_fetch_rejects_a_non_200():
     return _report("_fetch raises on a non-200", ok, "OSError http 500")
 
 
-def case_download_verifies_the_sha256():
-    body = b"PACKBYTES" * 1000
-    ROUTES["/f/firmware.pack"] = (200, body)
-    sha = hashlib.sha256(body).hexdigest()
-    dest = os.path.join(TMP, "got.pack")
-    size = updater._download(f"http://127.0.0.1:{PORT}/f/firmware.pack", dest, sha, 3)
-    with open(dest, "rb") as fh:
-        data = fh.read()
-    ok = size == len(body) and data == body
-    return _report("_download streams and verifies the pack", ok, f"{size} bytes")
-
-
-def case_download_rejects_a_bad_sha256():
-    ROUTES["/f/bad.pack"] = (200, b"not-the-pack")
-    dest = os.path.join(TMP, "bad.pack")
+def case_stage_streams_into_next_and_verifies_every_file():
+    # The pack is no longer written to flash at all: it is streamed straight
+    # into :next/. What matters is unchanged - the files land, byte for byte.
+    files = {"main.py": b"print('main')\n" * 40, "lib/net.py": b"NET = 1\n" * 90}
+    blob, entries = _pack(files)
+    ROUTES["/f/stage.pack"] = (200, blob)
+    _device_files(TMP)
+    _rm_next()
+    cwd = os.getcwd()
+    os.chdir(TMP)
     try:
-        updater._download(f"http://127.0.0.1:{PORT}/f/bad.pack", dest, "0" * 64, 3)
+        written, size = updater._stage(
+            f"http://127.0.0.1:{PORT}/f/stage.pack",
+            entries,
+            hashlib.sha256(blob).hexdigest(),
+            3,
+        )
+        got = {}
+        for rel in sorted(files):
+            with open(updater.NEXT_DIR + "/" + rel, "rb") as fh:
+                got[rel] = fh.read()
+        left_pack = os.path.exists(updater.PACK_PATH)
+    finally:
+        os.chdir(cwd)
+    ok = (
+        sorted(written) == sorted(files)
+        and got == files
+        and size == len(blob)
+        and not left_pack
+    )
+    return _report(
+        "_stage streams the pack into :next and verifies every file",
+        ok,
+        f"files={len(written)} size={size} pack_written={left_pack}",
+    )
+
+
+def case_stage_rejects_a_bad_pack_sha256():
+    files = {"main.py": b"print('main')\n"}
+    blob, entries = _pack(files)
+    ROUTES["/f/bad.pack"] = (200, blob)
+    _device_files(TMP)
+    _rm_next()
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        updater._stage(
+            f"http://127.0.0.1:{PORT}/f/bad.pack", entries, "0" * 64, 3
+        )
         ok = False
+        detail = "no raise"
     except ValueError as exc:
-        ok = "mismatch" in str(exc)
-    return _report("_download refuses a pack whose sha256 is wrong", ok, "ValueError")
+        ok = "pack sha256 mismatch" in str(exc)
+        detail = "ValueError " + str(exc)
+    finally:
+        os.chdir(cwd)
+    return _report("_stage refuses a pack whose sha256 is wrong", ok, detail)
+
+
+def case_stage_rejects_a_truncated_pack():
+    # A body that stops mid-record must not be adopted. This is the failure the
+    # old code expressed as "truncated pack (data)" from a file read; the sink
+    # has to catch it from a short stream instead.
+    files = {"main.py": b"print('main')\n" * 200}
+    blob, entries = _pack(files)
+    ROUTES["/f/cut.pack"] = (200, blob[: len(blob) // 2])
+    _device_files(TMP)
+    _rm_next()
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        updater._stage(
+            f"http://127.0.0.1:{PORT}/f/cut.pack",
+            entries,
+            hashlib.sha256(blob).hexdigest(),
+            3,
+        )
+        ok = False
+        detail = "no raise"
+    except ValueError as exc:
+        ok = "truncated" in str(exc)
+        detail = "ValueError " + str(exc)
+    finally:
+        os.chdir(cwd)
+    return _report("_stage refuses a truncated pack", ok, detail)
+
+
+def case_stage_rejects_a_pack_missing_a_manifest_file():
+    # The manifest's file LIST is binding: a pack that carries fewer files than
+    # it promised is rejected even if every file it did carry is intact.
+    files = {"main.py": b"print('main')\n", "lib/net.py": b"NET = 1\n"}
+    # The manifest (entries) promises two files; the pack carries only one, and
+    # its own sha256 is honest about that, so only the LIST check can catch it.
+    _full, entries = _pack(files)
+    blob, _one = _pack({"main.py": files["main.py"]})
+    ROUTES["/f/short.pack"] = (200, blob)
+    _device_files(TMP)
+    _rm_next()
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        updater._stage(
+            f"http://127.0.0.1:{PORT}/f/short.pack",
+            entries,
+            hashlib.sha256(blob).hexdigest(),
+            3,
+        )
+        ok = False
+        detail = "no raise"
+    except ValueError as exc:
+        ok = "file list" in str(exc)
+        detail = "ValueError " + str(exc)
+    finally:
+        os.chdir(cwd)
+    return _report("_stage refuses a pack missing a manifest file", ok, detail)
 
 
 def case_update_applies_a_release():
@@ -354,6 +450,11 @@ def _device_files(where):
     updater.VERSION_FILE = "version.txt"
 
 
+def _rm_next():
+    """Clear :next/ so a case starts from a clean staging slot."""
+    shutil.rmtree(updater.NEXT_DIR, ignore_errors=True)
+
+
 def main():
     global PORT, TMP
     server, PORT = _serve()
@@ -363,8 +464,10 @@ def main():
             case_fetch_reads_the_manifest(),
             case_fetch_rejects_a_tls_url(),
             case_fetch_rejects_a_non_200(),
-            case_download_verifies_the_sha256(),
-            case_download_rejects_a_bad_sha256(),
+            case_stage_streams_into_next_and_verifies_every_file(),
+            case_stage_rejects_a_bad_pack_sha256(),
+            case_stage_rejects_a_truncated_pack(),
+            case_stage_rejects_a_pack_missing_a_manifest_file(),
             case_update_applies_a_release(),
             case_apply_moves_the_old_tree_into_the_rollback_slot(),
             case_interrupted_apply_is_rolled_back(),

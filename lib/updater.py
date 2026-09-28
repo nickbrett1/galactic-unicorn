@@ -448,7 +448,12 @@ class _PackSink:
                 self._buf = self._buf[4:]
                 dest = NEXT_DIR + "/" + self._path
                 _mkdirs(dest)
-                self._out = open(dest, "wb")
+                # SIM115 wants a context manager, and it cannot have one: a
+                # file's bytes arrive across many reads, i.e. many separate
+                # calls to feed(), so the handle has to outlive the call that
+                # opened it. _close_file() and close() are what close it, and
+                # close() runs on every failure path.
+                self._out = open(dest, "wb")  # noqa: SIM115
                 self._file = hashlib.sha256()
                 self._state = self.DATA
                 if self._remaining == 0:

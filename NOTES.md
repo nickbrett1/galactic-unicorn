@@ -466,3 +466,34 @@ pre-existing, and it kept the current firmware as designed.
   script arguments (anything after the path is the next mpremote command), so
   the `run scripts/preview-icons.py rain` form never worked. Pace and condition
   are now globals read from the REPL namespace and set with a leading `exec`.
+
+- Follow-up 6 (cloud-blended-shade): "i like the color differences but can we not
+  have all the darker shade at the bottom. real clouds have color changes that
+  are more blended." Both halves of that are right, and they are the same fix.
+  The shade was two rows of 'S' filling the base edge to edge - nine tenths of
+  the darkest ink in the glyph pooled into one rectangle, with a hard horizontal
+  edge above it. On the panel that reads as a slab the cloud is sitting on, not
+  as an underside.
+  Rendered six arrangements at panel brightness (host PNG through the real
+  palettes, x0.55) before choosing: a straight ramp, an ordered dither, per-lobe
+  shadows, and lenses of different widths. The dither read as a screen door at
+  22 px and the per-lobe split read as two puddles; the lens won.
+  `_CLOUD` rows 7-9 are now shade 4 / 8 / 16 cells wide inside a 20-cell base,
+  each stopping short of the silhouette so the flanks stay body ink. The three
+  widths are the blend - a gradient at viewing distance where one step was a bar.
+  Silhouette untouched, so the shape that was liked is unchanged; only the ink
+  moved.
+  `tests/test_weather.py` had pinned the old rule outright ("the bottom inked row
+  is shade"), which is exactly what a good test should do - it caught the change.
+  It now pins the lens instead: the shade is one contiguous run per base row, it
+  never touches either silhouette edge, and it widens at every step down.
+  Same change ported to the remote's `$lib/ui/weather.js` (the phone draws the
+  firmware's own masks), and both suites re-run: firmware 84 passed, remote 188.
+  The JS port was re-diffed cell-for-cell against `lib/icons.py` /
+  `ambient.WEATHER_PENS` - all 7 glyphs, every cell and colour still match.
+  NOT verified on hardware: the board is on WiFi and there is no USB, so this is
+  a host render only. `scripts/preview-icons.py` is the check to run next time
+  the board is on a cable.
+  Still flat-banded: the SHORT cloud (`_CLOUD_TOP`, shared by rain, snow and
+  thunder) keeps its two full 'S' rows - it was not what was asked about, and at
+  11 px wide a lens has much less room. Worth matching if the bar bothers there.

@@ -283,6 +283,16 @@ _PARTLY = (
 # than it is tall, so it centres itself beside the full-height digits. The
 # bottom row steps in one column per side so the base is not a sheer wall.
 #
+# THE UNDERSIDE IS A LENS, NOT A BAND. The shade used to fill the bottom two
+# rows edge to edge, and on the panel that read as a slab the cloud was sitting
+# on - a hard dark bar under a lit shape, more like a waterline than weather.
+# Real cloud shading is graded: darkest under the thickest part, thinning to
+# nothing where the cloud thins out. So the shade steps outward as it descends
+# - 4 cells wide, then 8, then 16 in a 20-cell base - and stops short of the
+# silhouette on every row, leaving body ink at the flanks. The stepping IS the
+# blend: three widths down three rows reads as a gradient at viewing distance,
+# and the flanks stay mid-tone instead of dropping straight to shadow.
+#
 # A single-column spire is forbidden: one column of ink above its neighbours
 # reads as an antenna, so every apex is at least two columns wide.
 _CLOUD = (
@@ -293,9 +303,9 @@ _CLOUD = (
     "...OXXXXLO..LLLLLLL...",
     "...OXXXXXXLLLLXXXLO...",
     "LLLXXXXXXXLLXXXXXXXLLL",
-    "OLLXXXXXXXXXXXXXXXXLLO",
-    ".SSSSSSSSSSSSSSSSSSSS.",
-    ".SSSSSSSSSSSSSSSSSSSS.",
+    "OLLXXXXXXSSSSXXXXXXLLO",
+    ".XXXXXXSSSSSSSSXXXXXX.",
+    ".XXSSSSSSSSSSSSSSSSXX.",
     "......................",
 )
 

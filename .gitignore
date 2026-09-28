@@ -60,6 +60,8 @@ update.log
 remote.log
 applied_gen.txt
 crash.log
+# Written on the device by the idle-weather poller (lib/weather.py)
+weather.log
 
 # Python bytecode from the host-side harnesses
 __pycache__/

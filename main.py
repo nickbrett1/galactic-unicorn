@@ -408,7 +408,18 @@ def main():
     boot_banner(display, log)
 
     audio = Audio(display, config)
-    ambient = Ambient(display, config)
+    # The idle screen's weather. Best-effort and OPTIONAL, exactly like the
+    # remote: absent, disabled or failing, the ambient clock is unchanged. It
+    # is constructed even when disabled so the log always says which way it is.
+    try:
+        from weather import Weather
+
+        weather = Weather(config, log)
+        log("weather: " + weather.describe())
+    except Exception as exc:  # noqa: BLE001 - the display must survive a bad weather
+        print_exception(exc)
+        weather = None
+    ambient = Ambient(display, config, weather)
     ambient.ntp_ok = sync_ntp(log)
 
     # Started AFTER sync_ntp so the trace's first status line is the state the
@@ -567,6 +578,13 @@ def main():
             # the state machine changes.
             if remote is not None:
                 remote.poll_if_due(now)
+            # Weather only while the panel is IDLE: the fetch may join WiFi,
+            # which can block for a wifi attempt, and that must never share the
+            # thread with a running timer (the same rule the remote follows).
+            # engine.routine is None exactly in AMBIENT/OFF - never in PROMPT,
+            # COUNTDOWN or HANDOFF.
+            if weather is not None and engine.routine is None:
+                weather.poll_if_due(now)
             engine.tick(now)
         # One bad frame must not kill a display someone is relying on.
         except Exception as exc:  # noqa: BLE001

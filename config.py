@@ -27,6 +27,17 @@ CHIP = "rp2040"
 # Brightness ceiling. Full white at max draws just over 1 A, and COUNTDOWN
 # ends with the whole panel lit green, so keep the ceiling sensible.
 BRIGHTNESS_AMBIENT = 0.10
+
+# The weather readout gets its own, brighter level. AMBIENT (0.10) is fine for
+# the breathing status pixel and the clock, which are meant to disappear into
+# the furniture, but at 0.10 the weather is "way too dim" to read across a room
+# (the report that produced this) - and the phototransistor sends the board down
+# the dark-room path against a steady light()=17 anyway, where AMBIENT was the
+# only level it ever drew at. 0.40 was a first notch; 0.55 is the "a little dim
+# perhaps, notch it up" setting, and still under BRIGHTNESS_MAX (0.65) with a
+# margin for the LEDs.
+BRIGHTNESS_WEATHER = 0.55
+
 BRIGHTNESS_PROMPT = 0.45
 BRIGHTNESS_COUNTDOWN = 0.45
 BRIGHTNESS_HANDOFF = 0.60
@@ -37,6 +48,18 @@ BRIGHTNESS_MAX = 0.65
 # (this is exactly when bathtime happens - see section 4d rule 4).
 LIGHT_DARK = 40
 LIGHT_DIM = 400
+
+# The weather reading is the one thing exempt from the dark-room blanking.
+# The rule above exists so the panel reads as furniture and never lights a
+# bedroom, and the clock and the breathing pixel still obey it. But the
+# phototransistor does not know where the board actually sits: a shaded desk or
+# a hand over the sensor reads as "dark" while the room is plainly lit (this
+# board measures a steady light()=17), and the first thing that produced was "I
+# don't see any weather on the board". So the weather stays visible in the dark
+# - at the same AMBIENT brightness the lit-room path already uses, so it is a
+# dim, unlit-in-a-dark-room readout rather than a new light source. Set this
+# False to restore the old "dark room = lamp only" behaviour.
+AMBIENT_WEATHER_IN_DARK = True
 
 # ---------------------------------------------------------------------------
 # Audio
@@ -153,6 +176,64 @@ RADIO_PROBE_MS = 2000
 # the board, so this is a fixed offset and must be changed by hand at the DST
 # switch: Eastern is UTC-4 (EDT, summer) / UTC-5 (EST, winter).
 UTC_OFFSET_S = -4 * 3600  # EDT; use -5 * 3600 after the DST switch
+
+# ---------------------------------------------------------------------------
+# Weather on the idle screen (ambient)
+# ---------------------------------------------------------------------------
+
+# Show the current NYC weather on the idle screen. This is what idle MEANS now:
+# the weather takes the whole screen permanently, and the clock is only the
+# fallback for the moment before the first reading lands (see lib/ambient.py).
+WEATHER_ENABLED = True
+
+# WHERE THE READING COMES FROM: Open-Meteo, over PLAIN HTTP.
+#
+# The board cannot complete a TLS handshake (see UPDATE_MANIFEST_URL), so the
+# source must speak plain HTTP. Open-Meteo does, needs no API key, and answers
+# this request with a ~200-byte JSON body:
+#
+#   {"current":{"temperature_2m":14.3,"weather_code":3}}
+#
+# The location is fixed by lat/lon (Manhattan). Change the pair to move it; the
+# URL is built from them. `temperature_unit=celsius` is explicit because the
+# panel shows Celsius.
+WEATHER_LATITUDE = 40.7128
+WEATHER_LONGITUDE = -74.0060
+WEATHER_URL = (
+    "http://api.open-meteo.com/v1/forecast?latitude="
+    + str(WEATHER_LATITUDE)
+    + "&longitude="
+    + str(WEATHER_LONGITUDE)
+    + "&current=temperature_2m,weather_code&temperature_unit=celsius"
+)
+
+# How often the reading is refreshed, and how soon after a failure to try
+# again. Weather changes slowly, and every fetch is a bounded wifi join + GET
+# on an otherwise idle screen, so the refresh is minutes apart. A failure is
+# retried sooner, but not in a tight loop.
+WEATHER_POLL_MS = 15 * 60 * 1000
+WEATHER_RETRY_MS = 60 * 1000
+
+# The bound on EVERY socket operation of the fetch - connect and each read
+# alike (lib/net.py:http_get sets it on the socket), so a dead host cannot
+# stall a frame by more than this. The body is small, so 3 s is generous.
+WEATHER_TIMEOUT_S = 3
+
+# Hard cap on the response body (the real body is ~200 bytes), so a wrong or
+# hostile host cannot hand the board a document it cannot hold.
+WEATHER_READ_CAP = 1024
+
+# One wifi join ATTEMPT for the weather path, with the remote poller's single
+# attempt: a join only ever happens while the panel is IDLE (never in
+# COUNTDOWN or HANDOFF - see main.py's gate), so the worst case is a bounded
+# stall on an idle screen.
+WEATHER_WIFI_ATTEMPTS = 1
+WEATHER_WIFI_ATTEMPT_MS = 10000
+
+# Where a fetch failure is written down (bounded, like remote.log). The
+# transient REPL line is not enough: a failure has to be readable after the
+# session.
+WEATHER_LOG_FILE = "weather.log"
 
 # ---------------------------------------------------------------------------
 # Remote update (design memo: memos/CvaQ2nMNqaTvQbgYc8HJqW)

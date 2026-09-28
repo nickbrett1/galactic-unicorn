@@ -145,6 +145,76 @@ OrbStack. To pin a single node by hand (and accept that the devcontainer only
 opens while the board is attached), replace the two runArgs with
 `--device=/dev/tty.usbmodem<serial>`.
 
+## Weather on the idle screen
+
+When no routine is running, the panel shows the current NYC weather: a
+condition glyph plus the temperature in Celsius — e.g. a cloud and `14C`.
+
+- **Source:** Open-Meteo over **plain HTTP** (`config.WEATHER_URL`), by lat/lon
+  (Manhattan); change `WEATHER_LATITUDE`/`WEATHER_LONGITUDE` to move it. The
+  board cannot complete a TLS handshake, so the source must speak plain HTTP;
+  Open-Meteo needs no API key and answers with a ~200-byte JSON body.
+- **Cadence:** refreshed every `WEATHER_POLL_MS` (15 min); a failure retries
+  after `WEATHER_RETRY_MS` and is written to `weather.log` on the device.
+- **Idle only:** the fetch (which may join WiFi) runs only while the panel is
+  idle — never during PROMPT, COUNTDOWN or HANDOFF — so it can never share the
+  thread with a running timer. It is bounded (socket timeout + byte cap) and
+  joins WiFi at most once per attempt, exactly like the remote poll.
+- **Degrades cleanly:** with no reading yet, or with `WEATHER_ENABLED = False`,
+  the clock shows instead (fallback only).
+- **Survives the dark-room rule:** the clock and the breathing pixel go dark in
+  a dark room, but the weather stays (with the power lamp). The phototransistor
+  reads a shaded desk as dark while the room is lit — this board measures a
+  steady `light() = 17` against `LIGHT_DARK = 40`, which is what once made a
+  working feature look dead on the wall. Set `AMBIENT_WEATHER_IN_DARK = False`
+  to restore "dark room = lamp only".
+- **Brightness:** the weather draws at `BRIGHTNESS_WEATHER` (0.55), not the
+  dimmer AMBIENT (0.10) used for the clock and the status pixel — 0.10 was too
+  dim to read across a room. Lower it towards `BRIGHTNESS_AMBIENT` for a
+  subtler night-time readout.
+
+The conditions are drawn from `lib/icons.py` (`WEATHER_ICONS`), mapped from
+Open-Meteo's WMO codes by `lib/weather.py:classify` — sun, partly cloudy,
+cloud, fog, rain, snow and thunder. All are drawn as filled silhouettes, and
+every cloud shares one rule — a **flat base with humps on top**. A bare
+silhouette is hard to read at 11 px: an oval tapers into a teardrop, a slab
+reads as a brick, and the rain cloud without its drops reads as a blob.
+
+Every glyph is **shaded** the same way, with the same ink vocabulary: a mid
+**body** (`'X'`), a **lit** top (`'L'`) and a **shaded** underside (`'S'`), plus
+an **accent** ink (`'O'`) for the one element that needs a different colour —
+the rim on the cloud, the sun in `partly`, the drops in `rain`, the flakes in
+`snow`, the bolt in `thunder`. Each condition has its own small palette in
+`ambient.WEATHER_PENS` (body, lit, shade, accent), so the icons read as a lit,
+colour-coded set rather than a row of flat blue stamps.
+
+`cloud` is the signature glyph — the blocky, stair-stepped kind of pixel-art
+cloud. Its silhouette is uneven **terraces** rather than smooth curves: a
+taller left bump and a smaller right bump over a broad base, with the bottom
+row stepping in one column per side so the base is not a sheer wall. On a dark
+panel a cloud is recognised by its **tone**, not its outline: the lit top and
+shadowed base give it volume, where a single flat colour read as a blob or a
+hill.
+
+`icons._draw_frame` paints each ink with its own pen (falling back to the body
+pen when one is not supplied) and `ambient._draw_weather` picks the palette by
+condition. The temperature digits stay on `WEATHER_RGB`.
+
+The cloud palette is a **soft blue-grey, not white**. A white body was tried
+and blew out the dark room once `BRIGHTNESS_WEATHER` scales it toward 140; the
+body now lands around 75–100 on the panel — the clearest thing on the idle
+screen, but still furniture. The lit top (`CLOUD_LIT_RGB`) was dialled from
+205/230/240 (panel ~112) down to 170/195/205 (panel ~93) because the sunlit edge
+glowed on the wall; it still sits clearly above the body. The rim was the story
+of the earlier passes (white → 150 → 110 → 85, each "too bright"); with the tone
+split doing the work, it is now just a quiet edge rather than the brightest
+element.
+
+All are single static frames except **rain**, which animates: a short cloud with
+three streams of drops falling through it (`_rain_frame`, cycled on
+`icons.WEATHER_FRAME_MS` = 300 ms). A still frame of drops-on-a-cloud did not
+read as rain on the wall.
+
 ## Linting firmware
 
 Firmware is linted with `ruff check .`, which covers the

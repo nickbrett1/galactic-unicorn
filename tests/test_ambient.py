@@ -106,10 +106,21 @@ class FakeUnicorn:
 
 class FakeConfig:
     BRIGHTNESS_AMBIENT = 0.10
+    BRIGHTNESS_WEATHER = 0.55
     BRIGHTNESS_MAX = 0.65
     LIGHT_DARK = 40
     LIGHT_DIM = 400
     UTC_OFFSET_S = 0
+    AMBIENT_WEATHER_IN_DARK = True
+
+
+class FakeWeather:
+    """The three attributes Ambient reads (lib/weather.py)."""
+
+    def __init__(self, ok=True, temp_c=14, condition="rain"):
+        self.ok = ok
+        self.temp_c = temp_c
+        self.condition = condition
 
 
 _galactic = types.ModuleType("galactic")
@@ -123,6 +134,7 @@ sys.modules["picographics"] = _picographics
 
 import ambient
 import display
+import icons
 
 
 def report(name, ok, detail=""):
@@ -275,6 +287,218 @@ def case_dark_room_keeps_the_lamp():
     return body()
 
 
+def case_dark_room_still_shows_the_weather():
+    """The sensor reads a shaded desk as dark, in a plainly lit room.
+
+    Measured on the board: light()=17 against LIGHT_DARK=40. The old dark-room
+    frame was lamp-only, which is what made a working weather feature look dead
+    on the wall ("I don't see any weather on the board"). The weather now
+    survives the dark room - at the same AMBIENT brightness the lit-room path
+    uses, so it is no brighter than the idle screen has ever been.
+    """
+
+    def body():
+        d, a = fresh_with_weather()
+        a.draw_dark()
+        g = d.graphics
+        lamp = lamp_pixels(g)
+        # ...and at the weather brightness (0.40), not the dim AMBIENT lamp
+        # level: 0.10 was the "way too dim" report.
+        return report(
+            "a dark room keeps the lamp AND the weather, at the weather level",
+            lamp == [(0, 0, WHITE)]
+            and len(g.pixels) > 1
+            and g.texts == []
+            and d.gu.brightness == FakeConfig.BRIGHTNESS_WEATHER,
+            f"lamp={lamp} pixels={len(g.pixels)} brightness={d.gu.brightness}",
+        )
+
+    return body()
+
+
+def case_dark_room_weather_can_be_turned_off():
+    """AMBIENT_WEATHER_IN_DARK=False restores the old lamp-only dark frame."""
+
+    def body():
+        class DarkOff(FakeConfig):
+            AMBIENT_WEATHER_IN_DARK = False
+
+        d = display.Display(DarkOff())
+        a = ambient.Ambient(d, DarkOff(), FakeWeather())
+        a.ntp_ok = True
+        a.draw_dark()
+        g = d.graphics
+        return report(
+            "with the flag off, a dark room is the lamp alone",
+            g.pixels == [(0, 0, WHITE)] and g.texts == [],
+            f"pixels={len(g.pixels)} texts={g.texts}",
+        )
+
+    return body()
+
+
+def fresh_with_weather(**kw):
+    """A Display + Ambient pair whose weather source has a reading."""
+    d = display.Display(FakeConfig())
+    a = ambient.Ambient(d, FakeConfig(), FakeWeather(**kw))
+    a.ntp_ok = True
+    return d, a
+
+
+def case_weather_frame_keeps_the_lamp():
+    """The weather is furniture too - the corner lamp must stay lit."""
+
+    def body():
+        d, a = fresh_with_weather()
+        a.draw(0)
+        g = d.graphics
+        lamp = lamp_pixels(g)
+        # bigfont draws the temperature as rectangles, not with text().
+        return report(
+            "with weather, the lamp is lit and the frame is drawn",
+            lamp == [(0, 0, WHITE)] and len(g.pixels) > 1 and g.texts == [],
+            f"lamp={lamp} pixels={len(g.pixels)} texts={len(g.texts)}",
+        )
+
+    return body()
+
+
+def case_rain_animates_on_the_panel():
+    """The rain icon's drops move across successive ambient frames."""
+
+    def body():
+        d, a = fresh_with_weather(condition="rain")
+        a.draw(0)
+        first = {(p[0], p[1]) for p in d.graphics.pixels}
+        a.draw(icons.WEATHER_FRAME_MS)  # one frame on
+        second = {(p[0], p[1]) for p in d.graphics.pixels}
+        # The temperature digits are the same every frame; the icon is not, so
+        # the two frames must differ somewhere.
+        return report(
+            "the rain icon advances between ambient frames",
+            first != second and len(first) > 1 and len(second) > 1,
+            f"frame0_px={len(first)} frame1_px={len(second)} differ={first != second}",
+        )
+
+    return body()
+
+
+def case_cloud_is_drawn_in_four_tones():
+    """The cloud is the one SHADED glyph: body, lit top, shaded base and rim.
+
+    A single flat colour did not read as a cloud; the tone split is what does
+    it. All four pens must reach the panel in one frame, and every other glyph
+    (and the digits) must stay a single ink.
+    """
+
+    def body():
+        def inks(d):
+            # drop the status lamp's white pixel so only the glyph/digits show
+            return {p[2] for p in d.graphics.pixels if p[2] != (255, 255, 255)}
+
+        d, a = fresh_with_weather(condition="cloud")
+        a.draw(0)
+        pens = inks(d)
+        d2, a2 = fresh_with_weather(condition="rain")
+        a2.draw(0)
+        rain_pens = inks(d2)
+        wanted = set(ambient.WEATHER_PENS["cloud"])
+        rain_wanted = set(ambient.WEATHER_PENS["rain"])
+        return report(
+            "cloud and rain each draw with their own shaded palette",
+            wanted <= pens
+            and rain_wanted <= rain_pens
+            and ambient.CLOUD_BODY_RGB not in rain_pens,
+            f"cloud_missing={sorted(wanted - pens)} "
+            f"rain_missing={sorted(rain_wanted - rain_pens)}",
+        )
+
+    return body()
+
+
+def case_weather_raises_the_idle_brightness():
+    """The lit-room idle frame brightens for the weather, dims for the clock."""
+
+    def body():
+        d, a = fresh_with_weather()
+        a.draw(0)
+        weather_level = d.gu.brightness
+        d2, a2 = fresh(ntp_ok=True)
+        a2.draw(0)
+        clock_level = d2.gu.brightness
+        return report(
+            "weather draws at BRIGHTNESS_WEATHER, the clock stays AMBIENT",
+            weather_level == FakeConfig.BRIGHTNESS_WEATHER
+            and clock_level != FakeConfig.BRIGHTNESS_WEATHER,
+            f"weather={weather_level} clock={clock_level}",
+        )
+
+    return body()
+
+
+def case_weather_is_always_shown():
+    """No alternation: every idle frame is the weather, not the clock."""
+
+    def body():
+        d, a = fresh_with_weather()
+        frames = []
+        for phase in (0, 1000, 8000, 60000):
+            a.draw(phase)
+            # The weather draws with rectangles, never text() (the clock does).
+            frames.append((bool(d.graphics.texts), len(d.graphics.pixels)))
+        return report(
+            "the idle screen is always the weather",
+            all(not texts and pixels > 0 for texts, pixels in frames),
+            f"frames={frames}",
+        )
+
+    return body()
+
+
+def case_no_reading_falls_back_to_the_clock():
+    """Before the first fetch (or with weather off) the clock is unchanged."""
+
+    def body():
+        d, a = fresh_with_weather(ok=False)
+        a.draw(0)
+        return report(
+            "no reading -> the clock shows",
+            bool(d.graphics.texts),
+            f"texts={d.graphics.texts}",
+        )
+
+    return body()
+
+
+def case_weather_lamp_is_drawn_after_the_clear():
+    """Same ordering rule as the clock: the lamp survives the clear."""
+
+    def body():
+        d, a = fresh_with_weather()
+        order = []
+        real_clear = d.graphics.clear
+        real_pixel = d.graphics.pixel
+
+        def spy_clear():
+            order.append("clear")
+            real_clear()
+
+        def spy_pixel(x, y):
+            order.append("pixel")
+            real_pixel(x, y)
+
+        d.graphics.clear = spy_clear
+        d.graphics.pixel = spy_pixel
+        a.draw(0)
+        return report(
+            "the lamp is drawn after display.clear() (weather frame)",
+            order[:2] == ["clear", "pixel"],
+            f"order={order[:3]}...",
+        )
+
+    return body()
+
+
 def main():
     results = [
         case_lamp_is_in_the_corner(),
@@ -283,6 +507,15 @@ def main():
         case_lamp_survives_every_frame(),
         case_lamp_is_drawn_after_the_clear(),
         case_dark_room_keeps_the_lamp(),
+        case_dark_room_still_shows_the_weather(),
+        case_dark_room_weather_can_be_turned_off(),
+        case_weather_frame_keeps_the_lamp(),
+        case_rain_animates_on_the_panel(),
+        case_cloud_is_drawn_in_four_tones(),
+        case_weather_raises_the_idle_brightness(),
+        case_weather_is_always_shown(),
+        case_no_reading_falls_back_to_the_clock(),
+        case_weather_lamp_is_drawn_after_the_clear(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} passed")

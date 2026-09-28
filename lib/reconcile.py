@@ -288,7 +288,7 @@ def decide(desired, applied_gen, panel, now_epoch_s):
 
 def build_report(report, boot, fw, applied_gen, state, routine=None,
                  remaining_s=None, rssi=None, uptime_s=None, wedge=None,
-                 reset_cause=None):
+                 reset_cause=None, temp_c=None, condition=None):
     """Fill the observed-state JSON, in place, from one snapshot.
 
     `report` is a caller-owned dict, allocated ONCE and reused on every poll,
@@ -334,5 +334,16 @@ def build_report(report, boot, fw, applied_gen, state, routine=None,
         report.pop("reset_cause", None)
     else:
         report["reset_cause"] = reset_cause
+
+    # The idle screen's weather reading (lib/weather.py), relayed verbatim so
+    # the remote page and the Homepage tile can show the same indicator the
+    # panel is showing rather than polling the sky a second time. Both are
+    # cleared together - a temperature with no condition has no glyph.
+    if temp_c is None or condition is None:
+        report.pop("temp_c", None)
+        report.pop("condition", None)
+    else:
+        report["temp_c"] = temp_c
+        report["condition"] = condition
 
     return report

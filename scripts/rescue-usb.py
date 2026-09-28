@@ -89,12 +89,12 @@ class Link:
             # is what stranded the previous three runs.)
             self.s.write(b"\r\x02")
             time.sleep(0.1)
-        except Exception:  # noqa: BLE001, S110 - the node may already be gone
-            pass
+        except Exception:  # noqa: BLE001 - the node may already be gone
+            print("rescue: could not interrupt the node (already gone?)")
         try:
             self.s.close()
-        except Exception:  # noqa: BLE001, S110 - the node may already be gone
-            pass
+        except Exception:  # noqa: BLE001 - the node may already be gone
+            print("rescue: could not close the port (already gone?)")
 
 
 def drain(s, seconds, until=None):
@@ -235,7 +235,7 @@ def enter_raw(port, deadline_s):
                     break
             if b">>>" not in buf:
                 raise OSError(f"no prompt: {buf[-160:]!r}")
-            print(f"rescue: friendly REPL after {time.time() - t0:.1f}s")
+            print("rescue: friendly REPL after %.1fs" % (time.time() - t0))
             link.s.write(b"\r\x01")
             got = drain(link.s, 4.0, until=b"raw REPL; CTRL-B to exit\r\n>")
             if b"raw REPL; CTRL-B to exit\r\n>" not in got:
@@ -343,15 +343,16 @@ def push_once(port, files, version, deadline_s):
                 data = fh.read()
             before = time.monotonic()
             write_file(link, dest, data)
-            rel = os.path.relpath(path, ROOT)
-            took = time.monotonic() - before
-            print(f"rescue: {rel:<20} -> {dest:<20} {len(data):>6} B  {took:.2f}s")
+            print(
+                f"rescue: {os.path.relpath(path, ROOT):<20} -> {dest:<20} {len(data):6d} B  {time.monotonic() - before:.2f}s"
+            )
 
         if version:
             feed(link)
-            raw_exec(link, f"f = open('version.txt', 'w'); f.write({version + chr(10)!r}); f.close()")
-            stamped = eval(raw_exec(link, "print(repr(open('version.txt').read().strip()))")[0])
-            print(f"rescue: stamped version.txt = {stamped}")
+            raw_exec(link, "f = open('version.txt', 'w'); f.write({!r}); f.close()".format(version + "\n"))
+            print(
+                "rescue: stamped version.txt = {}".format(eval(raw_exec(link, "print(repr(open('version.txt').read().strip()))")[0]))
+            )
 
         # Read the pushed config back OFF THE DEVICE, so "it landed" is a
         # measurement and not a hope.
@@ -392,7 +393,7 @@ def main():
     if not files:
         raise SystemExit("rescue: nothing to push from " + ROOT)
     version = stamp_from_git(ROOT)
-    print(f"rescue: pushing {len(files)} files, stamping {version or '(no tag)'}")
+    print("rescue: pushing {} files, stamping {}".format(len(files), version or "(no tag)"))
 
     link = None
     for attempt in range(1, attempts + 1):

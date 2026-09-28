@@ -8,6 +8,9 @@ runtime.
 Frames are plain strings of 'X' and '.', so adding or redrawing an icon is an
 edit here and nothing else. `draw_icon` run-length encodes each row, so a
 solid run becomes one rectangle instead of N pixel writes.
+
+Weather glyphs may also use extra ink symbols - 'O' (rim), 'L' (sunlit) and
+'S' (shade) - see _draw_frame and the shaded `cloud` below.
 """
 
 FRAME_MS = 400  # how long each frame is held
@@ -197,6 +200,206 @@ ICONS = {
 }
 
 
+# -- weather pictures --------------------------------------------------------
+#
+# The idle screen's weather glyphs: 11x11 frames per condition from
+# lib/weather.py, in the same 'X'/'.' form the routine icons use and drawn by
+# the same run-length drawer, with 'O' available for a second (rim) ink on
+# `cloud` - see _CLOUD and _draw_frame. Most conditions are ONE static frame -
+# the idle panel is furniture and should mostly be still. `rain` is the
+# exception: it carries three frames so the drops visibly fall, because a still
+# frame of drops on a cloud did not read as rain (see _rain_frame).
+#
+# Sky is drawn as a FILLED silhouette rather than an outline: at 11 px, a
+# silhouette reads from across the room where thin lines do not. The rule for
+# every cloud is the same - a DEAD FLAT base with lobes on top. A cloud whose
+# silhouette tapers at top AND bottom is an oval, and an oval reads as a
+# teardrop, not a cloud (lib/icons.py has the scars: the idle panel showed a
+# "big drop" for the `cloud` condition until the base was squared off below).
+# Like `cloud`, the small glyphs are SHADED - the same 'L' lit top / 'X' body /
+# 'S' shade bands, so the whole row of icons reads as lit-from-above. 'O' is
+# the ACCENT ink here (the sun, the bolt, the drops, the flakes).
+_CLOUD_TOP = (
+    "...LL.LL...",
+    "..LLLLLLL..",
+    ".XXXXXXXXX.",
+    "XXXXXXXXXXX",
+    "SSSSSSSSSSS",
+    "SSSSSSSSSSS",
+)
+
+
+_SUN = (
+    ".....L.....",
+    ".....L.....",
+    "..L.LLL.L..",
+    "...LLLLL...",
+    "..LLLLLLL..",
+    "XXXXXXXXXXX",
+    "..SSSSSSS..",
+    "...SSSSS...",
+    "..S.SSS.S..",
+    ".....S.....",
+    ".....S.....",
+)
+
+# Sun in the accent ink (amber), cloud in the body/lit/shade greys.
+_PARTLY = (
+    "..O........",
+    ".OOO.......",
+    "OOOOO......",
+    ".OOO.......",
+    "..O..LLL...",
+    "....LLLLL..",
+    "...LLLLLLL.",
+    "..XXXXXXXXX",
+    ".XXXXXXXXXX",
+    "XXXXXXXXXXX",
+    "SSSSSSSSSSS",
+)
+
+# The cloud is the only SHADED glyph. Its shape and looks are lifted from
+# classic pixel-art cloud icons (the blocky, stair-stepped kind used for game
+# skies): a wide silhouette of uneven TERRACES - not smooth curves - lit from
+# above, with the underside in shadow. The extra ink symbols are what carry
+# that:
+#
+#   'X'  BODY    the mid tone (`ambient.CLOUD_BODY_RGB`)
+#   'L'  LIT     sunlit top: every up-facing edge and the cells just under it
+#   'S'  SHADE   the underside band along the base
+#   'O'  RIM     a thin grey edge on the vertical flanks
+#
+# WHY SHADING. A dark panel shows a cloud by its TONE, not its outline. The
+# earlier drafts were one flat blue with a grey outline, and on the wall they
+# read as a blob or a hill. Splitting the silhouette into lit-top / mid-body /
+# shaded-underside makes it read as a cloud at a glance: bright where the sky
+# lights it, dark underneath where it does not. The rim is kept (it was liked)
+# but is now just a quiet edge on the flanks rather than the brightest thing
+# in the glyph.
+#
+# SHAPE. Terraces of uneven size: a taller left bump, a smaller right bump,
+# merged into a broad base. Two EQUAL humps read as a sofa/lips, so the bumps
+# differ in height AND width. The whole thing is 22 px wide (not 11) and wider
+# than it is tall, so it centres itself beside the full-height digits. The
+# bottom row steps in one column per side so the base is not a sheer wall.
+#
+# A single-column spire is forbidden: one column of ink above its neighbours
+# reads as an antenna, so every apex is at least two columns wide.
+_CLOUD = (
+    "......................",
+    "......................",
+    "....LLLL..............",
+    "...LLLLLLL....LLL.....",
+    "...OXXXXLO..LLLLLLL...",
+    "...OXXXXXXLLLLXXXLO...",
+    "LLLXXXXXXXLLXXXXXXXLLL",
+    "OLLXXXXXXXXXXXXXXXXLLO",
+    ".SSSSSSSSSSSSSSSSSSSS.",
+    ".SSSSSSSSSSSSSSSSSSSS.",
+    "......................",
+)
+
+_FOG = (
+    "...........",
+    "..LLLLLLLL.",
+    "...........",
+    "XXXXXXXXX..",
+    "...........",
+    "..XXXXXXXX.",
+    "...........",
+    "SSSSSSSSS..",
+    "...........",
+    "..SSSSSSSS.",
+    "...........",
+)
+
+# Rain is the one weather glyph that ANIMATES. A single static frame read as
+# "a blob with dots" on the wall, not as rain: the drops sat inside the cloud
+# silhouette instead of falling out of it. So the cloud is shortened to the top
+# six rows and three one-pixel streams fall through the five rows beneath it,
+# one row per frame, cycling 0..2 - a short, slow shower rather than a flicker.
+_RAIN_CLOUD = _CLOUD_TOP
+
+
+_RAIN_STREAM = "..O..O..O.."
+_RAIN_BLANK = "..........."
+
+
+def _rain_frame(offset):
+    """The rain cloud with its falling streams `offset` rows lower (0..2).
+
+    Three one-pixel streams, each three rows tall, slide down one row per
+    frame through the five rows under the cloud; wrapping back to the top is
+    the drop leaving the cloud again. Every row is the full icon width, so a
+    frame is a legal 11x11 blit.
+    """
+    rows = list(_RAIN_CLOUD)
+    for r in range(5):
+        rows.append(_RAIN_STREAM if offset <= r < offset + 3 else _RAIN_BLANK)
+    return tuple(rows)
+
+
+_RAIN = (_rain_frame(0), _rain_frame(1), _rain_frame(2))
+
+_SNOW = _CLOUD_TOP + (
+    "..O.O.O.O..",
+    "...........",
+    ".O.O.O.O.O.",
+    "...........",
+    "..O.O.O.O..",
+)
+
+_THUNDER = _CLOUD_TOP + (
+    "...OO......",
+    "..OO.......",
+    "..OOOOO....",
+    "....OO.....",
+    "....O......",
+)
+
+# Keyed by the condition names lib/weather.py returns. `cloud` is the fallback
+# for anything unknown, so it is always present.
+WEATHER_ICONS = {
+    "sun": (_SUN,),
+    "partly": (_PARTLY,),
+    "cloud": (_CLOUD,),
+    "fog": (_FOG,),
+    "rain": _RAIN,  # already a tuple of frames - see _rain_frame
+    "snow": (_SNOW,),
+    "thunder": (_THUNDER,),
+}
+
+WEATHER_ICON_W = 11
+
+# How long each weather animation frame is held. Faster than the routine icons'
+# FRAME_MS (400): at three frames it is a whole cycle in 0.9 s, which reads as
+# a steady shower rather than a slow twitch - and it is still two orders of
+# magnitude slower than the render loop, so it costs nothing.
+WEATHER_FRAME_MS = 300
+
+
+def weather_icon_width(name):
+    """How wide weather icon `name` draws, or 0 if it is unknown."""
+    frames = WEATHER_ICONS.get(name)
+    return len(frames[0][0]) if frames else 0
+
+
+def draw_weather_icon(display, condition, x, y, age_ms=0, rgb=None, rim_rgb=None,
+                      lit_rgb=None, shade_rgb=None):
+    """Draw the weather icon for `condition` at (x, y), animated by `age_ms`.
+
+    A single-frame condition ignores `age_ms`; `rain` advances through its
+    frames on the shared WEATHER_FRAME_MS cadence.
+
+    `rgb` is the body colour; `rim_rgb` / `lit_rgb` / `shade_rgb` are the pens
+    for the 'O' / 'L' / 'S' ink symbols. Only `cloud` uses the extra symbols -
+    every other glyph is all-'X', so their extra pens are irrelevant.
+    """
+    frames = WEATHER_ICONS.get(condition) or WEATHER_ICONS["cloud"]
+    frame = frames[(age_ms // WEATHER_FRAME_MS) % len(frames)]
+    _draw_frame(display, frame, x, y, rgb, rim_rgb, lit_rgb, shade_rgb)
+
+
 def icon_width(name):
     """How wide icon `name` draws. Icons are not all the same width, so the
     PROMPT layout must ask rather than assume ICON_W."""
@@ -210,17 +413,40 @@ def draw_icon(display, name, x, y, age_ms, rgb=None):
     if not frames:
         return
     frame = frames[(age_ms // FRAME_MS) % len(frames)]
-    if rgb is not None:
-        display.use(rgb)
+    _draw_frame(display, frame, x, y, rgb)
+
+
+def _draw_frame(display, frame, x, y, rgb=None, rim_rgb=None, lit_rgb=None,
+                shade_rgb=None):
+    """Blit one frame, run-length encoding each row so a solid run becomes one
+    rectangle instead of N pixel writes.
+
+    Ink symbols: 'X' body (pen `rgb`), 'O' rim, 'L' lit, 'S' shade - each extra
+    pen falls back to `rgb` when not supplied. Runs of one symbol share a
+    rectangle, and the pen is only reset when it actually changes, so
+    single-ink glyphs cost exactly what they did before.
+    """
+    pens = {
+        "X": rgb,
+        "O": rim_rgb if rim_rgb is not None else rgb,
+        "L": lit_rgb if lit_rgb is not None else rgb,
+        "S": shade_rgb if shade_rgb is not None else rgb,
+    }
+    pen = None
     for r, row in enumerate(frame):
         c = 0
         n = len(row)
         while c < n:
-            if row[c] == "X":
-                run = 1
-                while c + run < n and row[c + run] == "X":
-                    run += 1
-                display.rect(x + c, y + r, run, 1)
-                c += run
-            else:
+            ch = row[c]
+            if ch not in pens:
                 c += 1
+                continue
+            run = 1
+            while c + run < n and row[c + run] == ch:
+                run += 1
+            want = pens[ch]
+            if want is not None and want != pen:
+                display.use(want)
+                pen = want
+            display.rect(x + c, y + r, run, 1)
+            c += run

@@ -38,6 +38,22 @@ BRIGHTNESS_AMBIENT = 0.10
 # margin for the LEDs.
 BRIGHTNESS_WEATHER = 0.55
 
+# ...but not after dark. 0.55 is right for a lit room and it is a LIGHT SOURCE
+# in an unlit one: the weather is on the panel permanently, so a night-time
+# readout at the daytime level is a small lamp glowing in a dark room all
+# evening ("it feels a bit bright when it's showing the weather but it's dark
+# outside"). This is the level the weather is drawn at once the sun is down -
+# between AMBIENT (0.10) and the daytime weather (0.55), so it stays legible
+# across the room without being the brightest thing in it.
+#
+# "After dark" is the SUN, not the phototransistor: config.LIGHT_DARK is a poor
+# witness indoors (it reads a shaded desk as dark - see AMBIENT_WEATHER_IN_DARK)
+# and would dim the panel at noon behind a cushion. The board instead asks the
+# weather source whether the sun is up (Open-Meteo's `is_day`, requested in
+# WEATHER_URL), which is the real sunset for this latitude and costs nothing -
+# it rides along in the request the board already makes.
+BRIGHTNESS_WEATHER_NIGHT = 0.22
+
 BRIGHTNESS_PROMPT = 0.45
 BRIGHTNESS_COUNTDOWN = 0.45
 BRIGHTNESS_HANDOFF = 0.60
@@ -197,6 +213,11 @@ WEATHER_ENABLED = True
 # The location is fixed by lat/lon (Manhattan). Change the pair to move it; the
 # URL is built from them. `temperature_unit=celsius` is explicit because the
 # panel shows Celsius.
+#
+# `is_day` is asked for alongside the two the panel draws: it is 1 in daylight
+# and 0 after sunset, so the board knows when to draw the weather at its dimmer
+# night level (BRIGHTNESS_WEATHER_NIGHT) without a clock or a light sensor. It
+# rides along free in this same ~200-byte response.
 WEATHER_LATITUDE = 40.7128
 WEATHER_LONGITUDE = -74.0060
 WEATHER_URL = (
@@ -204,7 +225,7 @@ WEATHER_URL = (
     + str(WEATHER_LATITUDE)
     + "&longitude="
     + str(WEATHER_LONGITUDE)
-    + "&current=temperature_2m,weather_code&temperature_unit=celsius"
+    + "&current=temperature_2m,weather_code,is_day&temperature_unit=celsius"
 )
 
 # How often the reading is refreshed, and how soon after a failure to try

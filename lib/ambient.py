@@ -170,8 +170,24 @@ class Ambient:
         which are meant to vanish into the furniture, but it is too dim to read
         the weather across a room ("way too dim") - so the weather has its own,
         brighter level. Falls back to AMBIENT if config has not got one.
+
+        After sunset it drops to BRIGHTNESS_WEATHER_NIGHT. The weather is on the
+        panel permanently, so at the daytime level it is a small lamp glowing in
+        a dark room all evening ("it feels a bit bright when it's showing the
+        weather but it's dark outside"). The sun, not the phototransistor, is
+        the witness: the sensor reads a shaded desk as dark in a lit room (see
+        draw_dark), so keying off it would dim the panel at noon behind a
+        cushion. `is_day` comes from the weather source itself (lib/weather.py)
+        and rides along in the request the board already makes.
+
+        A missing BRIGHTNESS_WEATHER_NIGHT (an older config) or an absent
+        is_day both fall back to the daytime level, so this can only ever dim,
+        never brighten.
         """
-        return getattr(self.config, "BRIGHTNESS_WEATHER", self.config.BRIGHTNESS_AMBIENT)
+        day = getattr(self.config, "BRIGHTNESS_WEATHER", self.config.BRIGHTNESS_AMBIENT)
+        if self.weather is not None and not getattr(self.weather, "is_day", True):
+            return getattr(self.config, "BRIGHTNESS_WEATHER_NIGHT", day)
+        return day
 
     def draw(self, phase_ms):
         d = self.display

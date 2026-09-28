@@ -107,6 +107,7 @@ class FakeUnicorn:
 class FakeConfig:
     BRIGHTNESS_AMBIENT = 0.10
     BRIGHTNESS_WEATHER = 0.55
+    BRIGHTNESS_WEATHER_NIGHT = 0.22
     BRIGHTNESS_MAX = 0.65
     LIGHT_DARK = 40
     LIGHT_DIM = 400
@@ -115,12 +116,13 @@ class FakeConfig:
 
 
 class FakeWeather:
-    """The three attributes Ambient reads (lib/weather.py)."""
+    """The attributes Ambient reads (lib/weather.py)."""
 
-    def __init__(self, ok=True, temp_c=14, condition="rain"):
+    def __init__(self, ok=True, temp_c=14, condition="rain", is_day=True):
         self.ok = ok
         self.temp_c = temp_c
         self.condition = condition
+        self.is_day = is_day
 
 
 _galactic = types.ModuleType("galactic")
@@ -436,6 +438,66 @@ def case_weather_raises_the_idle_brightness():
     return body()
 
 
+def case_night_dims_the_weather():
+    """After sunset the weather draws at the dim night level, not the daytime one.
+
+    The weather is on the panel permanently, so at BRIGHTNESS_WEATHER it is a
+    small lamp glowing in a dark room all evening. "After dark" is the sun
+    (weather.is_day), not the phototransistor, so BOTH idle paths must dim: the
+    lit-room frame (the sensor is fooled by a shaded desk) and the dark-room
+    frame (the real night the complaint is about).
+    """
+
+    def body():
+        d_day, a_day = fresh_with_weather(is_day=True)
+        a_day.draw(0)
+        day = d_day.gu.brightness
+        d_night, a_night = fresh_with_weather(is_day=False)
+        a_night.draw(0)
+        night = d_night.gu.brightness
+        d_dark, a_dark = fresh_with_weather(is_day=False)
+        a_dark.draw_dark()
+        night_dark = d_dark.gu.brightness
+        return report(
+            "after sunset the weather dims (lit room and dark room alike)",
+            day == FakeConfig.BRIGHTNESS_WEATHER
+            and night == FakeConfig.BRIGHTNESS_WEATHER_NIGHT
+            and night_dark == FakeConfig.BRIGHTNESS_WEATHER_NIGHT
+            and night < day,
+            f"day={day} night={night} night_dark={night_dark}",
+        )
+
+    return body()
+
+
+def case_a_missing_day_flag_stays_bright():
+    """A reading that predates is_day (or a source that omits it) never dims.
+
+    The flag only ever DIMS the panel, so its absence must fall on the bright,
+    normal side - a weather object without the attribute at all is the harshest
+    version of that.
+    """
+
+    def body():
+        class NoFlag:
+            ok = True
+            temp_c = 14
+            condition = "rain"
+
+        d = display.Display(FakeConfig())
+        a = ambient.Ambient(d, FakeConfig(), NoFlag())
+        a.ntp_ok = True
+        a.draw(0)
+        level = d.gu.brightness
+        return report(
+            "a reading with no is_day stays at the daytime brightness",
+            level == FakeConfig.BRIGHTNESS_WEATHER,
+            f"level={level}",
+        )
+
+    return body()
+
+
 def case_weather_is_always_shown():
     """No alternation: every idle frame is the weather, not the clock."""
 
@@ -513,6 +575,8 @@ def main():
         case_rain_animates_on_the_panel(),
         case_cloud_is_drawn_in_four_tones(),
         case_weather_raises_the_idle_brightness(),
+        case_night_dims_the_weather(),
+        case_a_missing_day_flag_stays_bright(),
         case_weather_is_always_shown(),
         case_no_reading_falls_back_to_the_clock(),
         case_weather_lamp_is_drawn_after_the_clear(),

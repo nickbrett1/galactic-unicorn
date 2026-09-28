@@ -170,8 +170,16 @@ condition glyph plus the temperature in Celsius — e.g. a cloud and `14C`.
   to restore "dark room = lamp only".
 - **Brightness:** the weather draws at `BRIGHTNESS_WEATHER` (0.55), not the
   dimmer AMBIENT (0.10) used for the clock and the status pixel — 0.10 was too
-  dim to read across a room. Lower it towards `BRIGHTNESS_AMBIENT` for a
-  subtler night-time readout.
+  dim to read across a room.
+- **Dims after sunset:** the weather is on the panel permanently, so at the
+  daytime level it is a small lamp glowing in a dark room all evening. Once the
+  sun is down it drops to `BRIGHTNESS_WEATHER_NIGHT` (0.22). "After dark" is the
+  sun, not the phototransistor — the sensor reads a shaded desk as dark in a lit
+  room, so keying off it would dim the panel at noon behind a cushion. The board
+  asks the weather source instead (`is_day` in `config.WEATHER_URL`), which is
+  the real sunset for the location and rides along free in the request the board
+  already makes. A reading without the flag is treated as day, so a missing
+  field can only ever leave the panel at its normal brightness.
 
 The conditions are drawn from `lib/icons.py` (`WEATHER_ICONS`), mapped from
 Open-Meteo's WMO codes by `lib/weather.py:classify` — sun, partly cloudy,

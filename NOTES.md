@@ -454,3 +454,15 @@ pre-existing, and it kept the current firmware as designed.
   ~8 s fuse resets the board about three conditions in (measured: died between
   cloud and fog). Also rendered the whole set to a host PNG through a fake
   display, which is the cheaper loop when there is no board to hand.
+
+- Follow-up 5: "can we just make the sun all the same brightness." The sun is a
+  LIGHT SOURCE, so the lit/shade treatment that gives the cloud volume is wrong
+  on it: with body/lit/shade the disc reads as a stripe - bright top half, dark
+  bottom half. Rendered the current palette against four flat levels; flat wins
+  outright. `WEATHER_PENS["sun"]` is now the same gold (170, 140, 32) for all
+  four inks, via a named `SUN_RGB`. The glyph still carries 'L'/'S' cells (the
+  frame is unchanged) - they just no longer mean anything different.
+  Also fixed the preview script's documented interface: `mpremote run` takes NO
+  script arguments (anything after the path is the next mpremote command), so
+  the `run scripts/preview-icons.py rain` form never worked. Pace and condition
+  are now globals read from the REPL namespace and set with a leading `exec`.

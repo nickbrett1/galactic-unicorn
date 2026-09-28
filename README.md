@@ -188,6 +188,10 @@ the rim on the cloud, the sun in `partly`, the drops in `rain`, the flakes in
 `ambient.WEATHER_PENS` (body, lit, shade, accent), so the icons read as a lit,
 colour-coded set rather than a row of flat blue stamps.
 
+The exception is the **sun**, which is flat: all four of its inks are the same
+gold. A light source should not be lit and shaded like a solid object, and a
+shaded underside on the disc read as a stripe across the middle of the sun.
+
 `cloud` is the signature glyph — the blocky, stair-stepped kind of pixel-art
 cloud. Its silhouette is uneven **terraces** rather than smooth curves: a
 taller left bump and a smaller right bump over a broad base, with the bottom
@@ -229,8 +233,20 @@ the real panel:
 
 It paints all seven in turn at the idle screen's own palettes and brightness,
 then soft-resets so `main.py` takes the panel back (you do not have to restart
-it). Pass a condition to hold just that one — `run scripts/preview-icons.py
-rain`. Note it feeds the watchdog while it runs, because `main.py` is the thing
+it). `mpremote run` takes no script arguments, so the pace and a single-glyph
+mode are set by a global in the REPL namespace instead, both in one invocation:
+
+```sh
+# 9 s per glyph
+.venv/bin/mpremote connect /dev/tty.<board> \
+  exec "PREVIEW_HOLD_MS=9000" run scripts/preview-icons.py
+
+# hold just one glyph
+.venv/bin/mpremote connect /dev/tty.<board> \
+  exec "PREVIEW_CONDITION='rain'" run scripts/preview-icons.py
+```
+
+Note it feeds the watchdog while it runs, because `main.py` is the thing
 that normally does and it is not running: without that the ~8 s fuse resets the
 board partway through the set.
 

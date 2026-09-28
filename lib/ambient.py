@@ -57,6 +57,9 @@ CLOUD_LIT_RGB = (123, 150, 165)
 CLOUD_SHADE_RGB = (55, 84, 106)
 CLOUD_RIM_RGB = (84, 88, 95)
 
+# The sun's single gold. Flat by design - see WEATHER_PENS.
+SUN_RGB = (170, 140, 32)
+
 # One palette per condition: (body, lit, shade, accent). Every weather glyph is
 # shaded the same way ('X' body, 'L' lit top, 'S' shade), and 'O' is the ACCENT
 # ink - the rim on the cloud, the sun in `partly`, the drops / flakes / bolt
@@ -64,7 +67,10 @@ CLOUD_RIM_RGB = (84, 88, 95)
 # icon falls back to the cloud too), so nothing ever draws in a bare single
 # ink.
 WEATHER_PENS = {
-    "sun": ((150, 120, 20), (190, 155, 40), (92, 68, 10), (190, 155, 40)),
+    # The sun is a LIGHT SOURCE, not a lit object, so it takes no lit/shade
+    # gradient - all four inks are the same gold. A shaded underside on the sun
+    # read as a stripe across the middle of the disc on the panel.
+    "sun": (SUN_RGB, SUN_RGB, SUN_RGB, SUN_RGB),
     "partly": ((120, 150, 170), (160, 190, 205), (55, 85, 110), (185, 145, 25)),
     "cloud": (CLOUD_BODY_RGB, CLOUD_LIT_RGB, CLOUD_SHADE_RGB, CLOUD_RIM_RGB),
     "fog": ((70, 110, 140), (110, 150, 180), (35, 65, 95), (70, 110, 140)),

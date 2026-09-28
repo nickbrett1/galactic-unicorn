@@ -18,14 +18,20 @@ glyph that does. Progress is also printed to the REPL, so a headless run
 still says which one is up.
 
 It finishes with a soft reset, which hands the panel back to main.py - so
-you do not have to remember to restart it. Run with an argument to hold a
-single condition instead, e.g. `run scripts/preview-icons.py rain`.
+you do not have to remember to restart it.
+
+Pace and a single condition are set by a global, because `mpremote run` takes
+NO script arguments (anything after the path is the next mpremote command,
+not sys.argv). Set the global with `exec` first, in the same invocation, and
+this module reads it instead of its own default:
+
+    mpremote connect <port> exec "PREVIEW_HOLD_MS=8000" run scripts/preview-icons.py
+    mpremote connect <port> exec "PREVIEW_CONDITION='rain'" run scripts/preview-icons.py
 
 MicroPython subset applies here (no f-strings): this file is compiled by the
 board, not by CPython.
 """
 
-import sys
 import time
 
 import machine
@@ -37,8 +43,12 @@ import display
 import icons
 import watchdog
 
-# Long enough to walk over and look, short enough to sit through.
-HOLD_MS = 3000
+# Long enough to walk over and look, short enough to sit through. Overridable
+# from the REPL namespace - see the docstring.
+HOLD_MS = globals().get("PREVIEW_HOLD_MS", 3000)
+
+# None = the whole set, in order.
+CONDITION = globals().get("PREVIEW_CONDITION", None)
 
 # A temperature per condition, only so the frame is composed like a real one
 # (the digits are part of what has to fit). The values are the ones the README
@@ -96,14 +106,10 @@ def hold(d, condition, ms):
 def main():
     d = display.Display(config)
     d.set_brightness(config.BRIGHTNESS_WEATHER)
-    wanted = None
-    argv = getattr(sys, "argv", None) or []
-    if len(argv) > 1:
-        wanted = argv[1]
-    if wanted and wanted in icons.WEATHER_ICONS:
-        hold(d, wanted, HOLD_MS * 3)
-    elif wanted:
-        print("preview: unknown condition", wanted, "- known:", ", ".join(ORDER))
+    if CONDITION and CONDITION in icons.WEATHER_ICONS:
+        hold(d, CONDITION, HOLD_MS * 3)
+    elif CONDITION:
+        print("preview: unknown condition", CONDITION, "- known:", ", ".join(ORDER))
     else:
         for condition in ORDER:
             hold(d, condition, HOLD_MS)

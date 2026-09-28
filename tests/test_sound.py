@@ -3,15 +3,21 @@
 
     python3 tests/test_sound.py
 
-The fanfare is a list of (frequency, seconds) pairs and a queue-and-go call,
-so a fake channel can record what the board would have played. What is under
-test is that it reads as a warm *ta-da* - it lifts, it peaks once, it lands,
-and it is never rapid or repeated like an alarm - and that a synth which
-misbehaves still cannot take the display down with it.
+The fanfare is a list of (frequency, seconds) pairs and a tune the frame loop
+walks with `tick(now)`, so a fake channel can record what the board would have
+played - and, just as importantly, *when*. What is under test is that it reads
+as a warm *ta-da* - it lifts, it peaks once, it lands, and it is never rapid or
+repeated like an alarm - and that a synth which misbehaves still cannot take the
+display down with it.
 
 The two properties that are easy to lose by editing a note list, and invisible
 without a board, are the ones asserted hardest: the tune must still fit inside
-HANDOFF_MS, and chime() must never raise.
+HANDOFF_MS, and chime()/tick() must never raise.
+
+`case_plays_over_time` is the regression test for the real board bug: the tune
+was once queued in a loop, which this synth does NOT do - `play_tone` retunes a
+single sustained voice, so the whole "tune" arrived as one held tone (the last
+note). That case fails if the notes are ever fired all at one instant again.
 """
 
 import os
@@ -38,10 +44,14 @@ class FakeChannel:
     def configure(self, waveform, **kwargs):
         self.configured = (waveform, kwargs)
 
-    def play_tone(self, freq, seconds):
+    def play_tone(self, freq, volume=None):
+        # The real signature is (frequency, volume=None, attack=None,
+        # release=None) - there is no duration and no queue. Recording the
+        # volume too pins that we always pass one: omitting it means FULL
+        # SCALE on the board, not "quiet".
         if self.fail_on_play:
             raise OSError(12)  # ENOMEM: the failure this board actually had
-        self.tones.append((freq, seconds))
+        self.tones.append((freq, volume))
 
 
 class FakeDisplay:
@@ -176,31 +186,101 @@ def case_lands():
 # -- the call itself ---------------------------------------------------------
 
 
-def case_queues_in_order():
+def _walk(audio, channel, start=0, span_ms=4000, step_ms=10):
+    """Drive the frame loop and report (freqs, when-each-note-started)."""
+    at = []
+    for t in range(start, start + span_ms, step_ms):
+        before = len(channel.tones)
+        audio.tick(t)
+        if len(channel.tones) > before:
+            at.append(t - start)
+    return [f for f, _ in channel.tones], at
+
+
+def case_plays_over_time():
     audio, display, channel = build()
-    audio.chime()
-    ok = channel.tones == [(int(f), d) for f, d in sound.DONE_SOUND] and display.plays == 1
+    audio.chime(0)
+    freqs, at = _walk(audio, channel)
+    # The bug this pins: all five notes must NOT land on one instant. They are
+    # a phrase, spread over the tune's length, in order.
+    ok = (
+        freqs == [int(f) for f, _ in sound.DONE_SOUND]
+        and len(at) == len(sound.DONE_SOUND)
+        and at[0] == 0
+        and at[-1] >= 500
+        and display.plays == 1
+    )
     return _report(
-        "chime queues every note in order, then starts the synth once",
+        "chime arms the tune and tick plays the notes one at a time",
         ok,
-        f"{len(channel.tones)} notes, play_synth x{display.plays}",
+        f"{len(at)} notes over {at[-1] if at else 0} ms, play_synth x{display.plays}",
     )
 
 
-def case_configured_triangle():
+def case_every_note_held_for_its_own_duration():
+    audio, _display, channel = build()
+    audio.chime(0)
+    _, at = _walk(audio, channel)
+    # Note n+1 must arrive one note-n duration after note n - that is what
+    # makes them separate notes instead of one sustained tone.
+    expected = [0]
+    for _freq, dur in sound.DONE_SOUND[:-1]:
+        expected.append(expected[-1] + int(dur * 1000))
+    # The walk steps in 10 ms frames, so a note lands within one step.
+    ok = len(at) == len(expected) and all(
+        abs(got - want) <= 10 for got, want in zip(at, expected)
+    )
+    return _report(
+        "each note holds for its own duration before the next one",
+        ok,
+        f"started at {at} ms, wanted {expected} ms",
+    )
+
+
+def case_releases_when_the_tune_ends():
+    audio, display, channel = build()
+    audio.chime(0)
+    _walk(audio, channel, span_ms=4000)
+    total_ms = int(sum(dur for _, dur in sound.DONE_SOUND) * 1000)
+    # The landing note rings for its full length and is then released, rather
+    # than droning on under the green screen for the rest of the handoff.
+    ok = display.stops == 1
+    return _report(
+        "the synth is released once the landing note has rung",
+        ok,
+        f"stops={display.stops}, tune {total_ms} ms of {config.HANDOFF_MS} ms handoff",
+    )
+
+
+def case_notes_carry_an_explicit_volume():
+    audio, _display, channel = build()
+    audio.chime(0)
+    _walk(audio, channel)
+    # Omitting it is not "quiet" - play_tone defaults to full scale.
+    ok = channel.tones and all(vol == sound.NOTE_VOLUME for _f, vol in channel.tones)
+    return _report(
+        "every note is retuned with an explicit volume",
+        ok,
+        f"volumes {sorted({vol for _f, vol in channel.tones})}",
+    )
+
+
+def case_configured_soft():
     _, _, channel = build()
     waveform, kwargs = channel.configured
-    # TRIANGLE, not SQUARE: the warmer waveform is half of "ta-da, not alarm".
-    ok = waveform == channel.TRIANGLE and kwargs.get("volume") == 0.75
+    # SINE, not SQUARE: the softer waveform is half of "ta-da, not alarm".
+    ok = waveform == channel.SINE and kwargs.get("volume") == sound.NOTE_VOLUME
     return _report(
-        "channel is configured triangle (warm), positional waveform", ok, f"{kwargs}"
+        "channel is configured sine (soft), positional waveform", ok, f"{kwargs}"
     )
 
 
 def case_play_tone_failure_is_silent():
     audio, _display, _channel = build(fail_on_play=True)
     try:
-        audio.chime()
+        audio.chime(0)
+        for t in range(0, 3000, 10):  # the failure lands on the first tick
+            audio.tick(t)
         ok = True
     except Exception as exc:  # noqa: BLE001 - the point is that nothing escapes
         ok = False
@@ -215,7 +295,9 @@ def case_play_tone_failure_is_silent():
 def case_play_synth_failure_is_silent():
     audio, _display, _channel = build(fail_on_play_synth=True)
     try:
-        audio.chime()
+        audio.chime(0)
+        for t in range(0, 3000, 10):
+            audio.tick(t)
         ok = True
     except Exception as exc:  # noqa: BLE001
         ok = False
@@ -230,14 +312,29 @@ def case_play_synth_failure_is_silent():
 def case_muted_is_quiet():
     audio, display, channel = build()
     audio.toggle_mute()
-    audio.chime()
+    audio.chime(0)
+    _walk(audio, channel)
     ok = channel.tones == [] and display.plays == 0
-    return _report("muted board queues nothing", ok, f"{len(channel.tones)} notes")
+    return _report("muted board plays nothing", ok, f"{len(channel.tones)} notes")
+
+
+def case_mute_mid_tune_stops_it():
+    audio, display, channel = build()
+    audio.chime(0)
+    _walk(audio, channel, span_ms=200)  # let a note or two out
+    mid = len(channel.tones)
+    audio.toggle_mute()  # the parent's escape hatch, mid-jingle
+    audio.tick(6000)
+    ok = mid > 0 and len(channel.tones) == mid and display.stops == 1
+    return _report(
+        "muting mid-tune silences the rest of it", ok, f"{mid} notes then a stop"
+    )
 
 
 def case_audio_disabled_is_quiet():
     audio, _display, channel = build(audio_enabled=False)
-    audio.chime()
+    audio.chime(0)
+    _walk(audio, channel)
     ok = audio.channel is None and channel.tones == []
     return _report("AUDIO_ENABLED False -> no channel, chime is a no-op", ok, "")
 
@@ -269,11 +366,15 @@ def main():
         case_has_rising_run(),
         case_peaks_once(),
         case_lands(),
-        case_queues_in_order(),
-        case_configured_triangle(),
+        case_plays_over_time(),
+        case_every_note_held_for_its_own_duration(),
+        case_releases_when_the_tune_ends(),
+        case_notes_carry_an_explicit_volume(),
+        case_configured_soft(),
         case_play_tone_failure_is_silent(),
         case_play_synth_failure_is_silent(),
         case_muted_is_quiet(),
+        case_mute_mid_tune_stops_it(),
         case_audio_disabled_is_quiet(),
         case_stop_is_safe_without_channel(),
     ]

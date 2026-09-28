@@ -6,7 +6,7 @@ the host.
 
 There is usually no board on the wire when a note list is being edited, and
 "does this sound warm or does it sound like an alarm" is not a question a unit
-test can answer. This renders lib/sound.DONE_SOUND with the same triangle wave
+test can answer. This renders lib/sound.DONE_SOUND with the same sine wave
 and the same envelope lib/sound.Audio configures on the synth, so a change can
 be auditioned before it is flashed.
 
@@ -18,6 +18,7 @@ is a laptop speaker standing in. Treat it as a way to hear the shape of a
 tune, not as a way to prove what the board will do.
 """
 
+import math
 import os
 import struct
 import sys
@@ -34,7 +35,8 @@ RATE = 22050
 
 # The envelope Audio._configure sets on the channel, and the amplitudes it
 # ends up at: channel volume x the board's global volume. Kept in step with
-# lib/sound.py - the ta-da is TRIANGLE with a gentle attack/release.
+# lib/sound.py - the ta-da is SINE with a gentle attack/release. The board
+# forces SINE inside play_tone whatever configure() asks for; see
 ATTACK, DECAY, SUSTAIN, RELEASE = 0.04, 0.08, 0.85, 0.25
 CHANNEL_VOLUME = 0.75
 
@@ -76,8 +78,8 @@ def render(notes, rate=RATE):
         for i in range(n):
             t = i / rate
             phase = (freq * t) % 1.0
-            triangle = 4.0 * abs(phase - 0.5) - 1.0
-            samples.append(int(amp * envelope(t, dur) * triangle))
+            sine = math.sin(2.0 * math.pi * phase)
+            samples.append(int(amp * envelope(t, dur) * sine))
     return samples
 
 

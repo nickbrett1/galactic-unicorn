@@ -324,6 +324,10 @@ class Engine:
             del self._injected[:]
         self._handle_events(events, now)
 
+        # Walk the time-is-up jingle. One step per frame, so the tune plays
+        # without ever blocking the render loop - see lib/sound.py.
+        self.audio.tick(now)
+
         # Dark room -> the clock and the breathing pixel go dark (they are
         # furniture, and furniture should not light a bedroom at night), but
         # the power lamp does NOT: see ambient.draw_dark. A press still wakes
@@ -354,8 +358,11 @@ class Engine:
             self.display.set_brightness(self.config.BRIGHTNESS_COUNTDOWN)
             if self.remaining_ms(now) <= 0:
                 # The one sound the board makes, and the same for every
-                # routine: the timer is up.
-                self.audio.chime()
+                # routine: the timer is up. This only *arms* the jingle - the
+                # notes are played by audio.tick() from the frame loop, because
+                # play_tone retunes a sustained voice rather than queueing a
+                # note (see the module docstring in lib/sound.py).
+                self.audio.chime(now)
                 self._enter(HANDOFF, now)
                 self._render_handoff(now)
                 return

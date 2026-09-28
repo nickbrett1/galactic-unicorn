@@ -170,6 +170,107 @@ def test_should_cycle_radio_zero_threshold_disables_recovery():
     assert remote.should_cycle_radio(5, None) is False
 
 
+# -- the recovery is SPENT when it fails, so it cannot run forever -------------
+#
+# Measured 2026-09-28, fw=0.1.39: 22 of 23 cycles failed inside one wedge, one
+# every ~8 s, and the poller never recorded a recovery. A cycle takes the
+# interface DOWN to do its job, so an unthrottled one is a radio that never gets
+# a quiet second - the recovery becomes what prevents recovery.
+
+def test_recovery_is_available_bounds_the_count():
+    assert remote.recovery_is_available(0, 3, None, 0) is True
+    assert remote.recovery_is_available(2, 3, None, 0) is True
+    # Three failures in a row and the board stops cycling until a poll works.
+    assert remote.recovery_is_available(3, 3, None, 0) is False
+    assert remote.recovery_is_available(9, 3, None, 0) is False
+
+
+def test_recovery_is_available_bounds_the_rate():
+    assert remote.recovery_is_available(0, 0, 119999, 120000) is False
+    assert remote.recovery_is_available(0, 0, 120000, 120000) is True
+    # No cycle yet this session: the rate bound has nothing to bite on.
+    assert remote.recovery_is_available(0, 0, None, 120000) is True
+
+
+def test_recovery_bounds_zero_disable_them():
+    # 0 disables, and it must not be the most aggressive setting.
+    assert remote.recovery_is_available(99, 0, 0, 0) is True
+    assert remote.recovery_is_available(99, None, 0, None) is True
+
+
+class _UpWlan:
+    """A radio that claims to be up - the state _note_failure acts on."""
+
+    def isconnected(self):
+        return True
+
+
+class _FailureStub:
+    """Only what _note_failure touches, so the throttle seam can be pinned."""
+
+    _recovery_available = remote.Remote._recovery_available
+
+    def __init__(self, fails=0, failed_cycles=0, last_cycle_at=None):
+        self.radio_reset_after = 3
+        self.radio_reset_max = 3
+        self.radio_reset_cooldown_ms = 120000
+        self._fails_since_ok = fails
+        self._failed_cycles = failed_cycles
+        self._last_cycle_at = last_cycle_at
+        self._spent_warned = False
+        self.cycles = 0
+        self.logs = []
+
+    def _radio(self):
+        return _UpWlan()
+
+    def _cycle_radio(self):
+        self.cycles += 1
+        self._last_cycle_at = time.ticks_ms()
+
+    def _net_log(self, message):
+        self.logs.append(message)
+
+
+def test_note_failure_cycles_once_at_the_threshold():
+    stub = _FailureStub(fails=2)
+    remote.Remote._note_failure(stub)
+    assert stub.cycles == 1
+    assert stub._fails_since_ok == 3
+
+
+def test_note_failure_stops_once_the_allowance_is_spent():
+    stub = _FailureStub(fails=2, failed_cycles=3)
+    remote.Remote._note_failure(stub)
+    assert stub.cycles == 0
+    assert stub._fails_since_ok == 3
+    assert any("spent" in line for line in stub.logs)
+    # Warned once, not once per poll: a board that has stopped trying must not
+    # look like a board that is still recovering.
+    remote.Remote._note_failure(stub)
+    assert len(stub.logs) == 1
+
+
+def test_note_failure_waits_out_the_cool_down():
+    stub = _FailureStub(fails=2, last_cycle_at=time.ticks_ms())
+    remote.Remote._note_failure(stub)
+    assert stub.cycles == 0
+    assert any("spent" in line for line in stub.logs)
+
+
+def test_note_failure_does_not_count_a_down_link():
+    class _DownWlan:
+        def isconnected(self):
+            return False
+
+    stub = _FailureStub(fails=2)
+    stub._radio = lambda: _DownWlan()
+    remote.Remote._note_failure(stub)
+    assert stub.cycles == 0
+    # An honestly-down link is join_wifi's problem, not the wedge's.
+    assert stub._fails_since_ok == 0
+
+
 # -- the cycle is DEFERRED to the render loop, never run inside the poll ------
 
 class _CycleStub:

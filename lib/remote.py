@@ -164,6 +164,32 @@ def should_cycle_radio(consecutive_link_failures, threshold):
     return consecutive_link_failures >= threshold
 
 
+def recovery_is_available(failed_cycles, max_cycles, since_last_ms, cooldown_ms):
+    """False once the radio cycle has been SPENT: too many, or too soon.
+
+    The cycle is the only thing on the board that can bring a deaf CYW43 back
+    (lib/net.py:radio_reset), which is exactly why it must not run in a tight
+    forever-loop. It takes the interface down to do its job, so a cycle every
+    few seconds is a radio that never gets a quiet second - and if the deaf
+    state is one time clears, the recovery becomes what prevents it.
+
+    Measured 2026-09-28, fw=0.1.39: 22 of 23 cycles failed across a single
+    wedge, one every ~8 s, and no poll ever recovered. So this bounds both the
+    count and the rate. `max_cycles` is consecutive FAILED cycles - one poll
+    that succeeds clears the run, so the next wedge gets a full allowance.
+    `since_last_ms` is None when no cycle has run yet this session.
+
+    Either bound at 0 disables it, matching how the rest of config spells
+    "off": disabling must not be the most aggressive setting.
+    """
+    if max_cycles and max_cycles > 0 and failed_cycles >= max_cycles:
+        return False
+    if cooldown_ms and cooldown_ms > 0 and since_last_ms is not None:
+        if since_last_ms < cooldown_ms:
+            return False
+    return True
+
+
 # Below this much free memory, an ENOMEM is taken to be a heap shortfall.
 # Above it, the heap has room and the refusal came from somewhere else. 32 KB
 # is comfortable against the board's ~90-100 KB idle free and the ~25 KB a TLS
@@ -400,6 +426,18 @@ class Remote:
         # (see should_cycle_radio and net.radio_reset).
         self.radio_reset_after = int(getattr(config, "RADIO_RESET_AFTER", 3))
         self._fails_since_ok = 0
+        # How far the recovery itself may go. A cycle takes the interface down,
+        # so an unthrottled one is a radio that never gets quiet (see
+        # recovery_is_available). Counted in FAILED cycles, cleared by a poll.
+        self.radio_reset_max = int(getattr(config, "RADIO_RESET_MAX", 3))
+        self.radio_reset_cooldown_ms = int(
+            getattr(config, "RADIO_RESET_COOLDOWN_MS", 120000)
+        )
+        self._failed_cycles = 0
+        self._last_cycle_at = None
+        # One line per outage when the allowance runs out, so a board that has
+        # stopped trying does not look like a board that is still recovering.
+        self._spent_warned = False
         # A cycle the poller has ASKED for but not performed: the render loop
         # owns the doing (see _cycle_radio and main.py).
         self.cycle_pending = False
@@ -495,6 +533,10 @@ class Remote:
             if self.journal is not None:
                 self.journal.note_recovery(self._fails_since_ok)
         self._fails_since_ok = 0
+        # The link is good again: the recovery's allowance is restored, so the
+        # next wedge starts with a full one rather than inheriting this one.
+        self._failed_cycles = 0
+        self._spent_warned = False
 
     def _note_failure(self):
         """Count it, and cycle the radio once the run is long enough.
@@ -514,7 +556,29 @@ class Remote:
             return
         self._fails_since_ok += 1
         if should_cycle_radio(self._fails_since_ok, self.radio_reset_after):
-            self._cycle_radio()
+            if self._recovery_available():
+                self._cycle_radio()
+            elif not self._spent_warned:
+                self._spent_warned = True
+                self._net_log(
+                    "the radio cycle has been spent ("
+                    + str(self._failed_cycles)
+                    + " failed"
+                    + (", within the cool-down" if self._failed_cycles == 0 else "")
+                    + ") - polling on without it"
+                )
+
+    def _recovery_available(self):
+        """Is a cycle still allowed? (policy in recovery_is_available)."""
+        since = None
+        if self._last_cycle_at is not None:
+            since = time.ticks_diff(time.ticks_ms(), self._last_cycle_at)
+        return recovery_is_available(
+            self._failed_cycles,
+            self.radio_reset_max,
+            since,
+            self.radio_reset_cooldown_ms,
+        )
 
     def _cycle_radio(self):
         """Ask for a radio cycle. The render loop performs it, not the poll.
@@ -528,6 +592,7 @@ class Remote:
         and runs cycle_radio() there.
         """
         self._fails_since_ok = 0
+        self._last_cycle_at = time.ticks_ms()
         self.cycle_pending = True
         if self.journal is not None:
             self.journal.note_cycle(None)
@@ -551,11 +616,16 @@ class Remote:
             recovered = net.radio_reset(self.config, log=self._net_log, feed=self._feed)
         except Exception as exc:  # noqa: BLE001 - recovery must not kill the loop
             self._log_failure(exc, "radio cycle", None)
+            self._failed_cycles += 1
             return False
         self._net_log(
             "radio cycle recovered the radio" if recovered
             else "radio cycle did not recover the radio"
         )
+        # A recovery is SPENT by failing: the next one is delayed by the
+        # cool-down and the run is bounded by radio_reset_max, so a wedge that
+        # cycles cannot fix does not become a radio that is always down.
+        self._failed_cycles = 0 if recovered else self._failed_cycles + 1
         if self.journal is not None:
             self.journal.note_cycle(recovered)
         return recovered

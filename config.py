@@ -124,6 +124,23 @@ NTP_RETRY_MS = 1000
 # enough that a remote Cancel still lands during a countdown. 0 disables it.
 RADIO_RESET_AFTER = 3
 
+# How hard the cycle may try before the board gives up and just keeps polling.
+#
+# A cycle that fails is not a cycle that nearly worked. Measured 2026-09-28,
+# board fw=0.1.39: inside one wedge, 22 of 23 cycles failed and the poller
+# never once recorded a recovery - and because each cycle TEARS THE INTERFACE
+# DOWN, running one every ~8 s is a radio that is never left quiet long enough
+# to climb out on its own. The recovery becomes the thing preventing recovery.
+#
+# RADIO_RESET_MAX bounds how many consecutive cycles may FAIL before the board
+# stops cycling and just keeps polling on the ordinary cadence; any poll that
+# succeeds clears the run, so the next wedge starts with a full allowance.
+# RADIO_RESET_COOLDOWN_MS bounds the rate even while they are still failing.
+# Both 0 restores the old unbounded behaviour; 0 is how the rest of config
+# spells "off", and it must stay expressible.
+RADIO_RESET_COOLDOWN_MS = 120000
+RADIO_RESET_MAX = 3
+
 # The cycle's own budget, and its proof. The interface is given RADIO_DOWN_MS
 # to actually report itself down before the cycle is called a no-op, and the
 # confirming TCP round trip - the only evidence the wedge cannot fake - is

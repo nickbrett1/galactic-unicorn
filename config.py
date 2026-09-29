@@ -77,6 +77,15 @@ LIGHT_DIM = 400
 # False to restore the old "dark room = lamp only" behaviour.
 AMBIENT_WEATHER_IN_DARK = True
 
+# After sunset, draw the night sky (moon + stars) instead of the sun. The `sun`
+# and `partly` conditions are the two whose glyph is a light source, and a gold
+# sun over a clear night is simply the wrong sky - Open-Meteo reports code 0
+# (clear) all night, so the panel drew a sun at midnight. Once `is_day` is 0
+# both become the night glyphs (lib/icons.py:_NIGHT / _PARTLY_NIGHT); every
+# other condition (cloud, rain, snow, fog, thunder) is already honest after
+# dark and keeps its glyph. Set this False to get the sun back at night.
+AMBIENT_NIGHT_SKY = True
+
 # ---------------------------------------------------------------------------
 # Audio
 # ---------------------------------------------------------------------------

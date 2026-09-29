@@ -615,3 +615,75 @@ Host results: pytest 85 passed (was 84); ruff clean; test_ambient 17/17.
   act on. If "the weather indicator" was meant to include the page chip, that is
   a follow-up: relay `is_day` through the poll/state and dim the chip's palette
   in `$lib/ui/weather.js` / `WeatherIndicator.svelte`.
+
+## T4 — task: "show a night scene, like stars or moon, after sunset" (2026-09-29)
+
+Request, verbatim: *"can we show a night scene like stars or moon when it's
+after sunset"*.
+
+### The read
+
+T3 (above) taught the panel *when* it is night (`weather.is_day`). This task is
+about what it DRAWS then. The bug was sitting right next to T3 the whole time:
+`sun` is weather_code 0 - "clear sky" - and Open-Meteo reports a clear sky at
+midnight exactly as it does at noon, so the idle panel drew a gold **sun** in a
+dark room all night. `partly` did the same, with the amber disc peeking out
+from behind the cloud.
+
+The fix is the smallest one that makes the sky honest: **a sun is only ever
+drawn when the sun is up.** After sunset the two sunny conditions swap in a
+night glyph; every other condition is already truthful after dark (a wet night
+is still rain, an overcast night is still cloud) and is left exactly as it was.
+
+### The change
+
+- lib/icons.py: two new glyphs in the existing 'X'/'L'/'S'/'O' ink vocabulary,
+  registered in `WEATHER_ICONS` as `night` and `partly-night` so
+  `weather_icon_width` / `draw_weather_icon` reach them with no new API.
+  `_NIGHT` is a crescent moon (lit limb, body, shaded inner edge) with a scatter
+  of star pixels; `_PARTLY_NIGHT` is the same crescent where `partly`'s sun used
+  to sit, over the untouched cloud. The moon is the one glyph whose body is a
+  *cool* ink - the whole point is that it should not look like the sun.
+- lib/ambient.py: `NIGHT_PENS` (the night palettes) and `NIGHT_GLYPHS` (the
+  condition -> night-glyph map); `pens_for()` is the single lookup both the day
+  and night tables go through. `_draw_weather` resolves the glyph name and the
+  palette once, so the digits, the centring and the width all follow.
+- config.py: `AMBIENT_NIGHT_SKY` (True) opts the substitution out.
+- scripts/preview-icons.py: paints the two night glyphs too (nine, not seven),
+  and now uses `ambient.pens_for`.
+
+### Why only `sun` and `partly`
+
+They are the only two conditions whose glyph is a LIGHT SOURCE. Everything else
+is a sky state that is equally true at 2am, and swapping a rain cloud for a
+moon would be a new lie in place of the old one. The night sky is therefore not
+"the idle screen at night" - it is "the clear sky at night", which is what a
+moon and stars actually mean.
+
+### Fallbacks (both fall on the bright/day side)
+
+- A reading with no `is_day` at all is treated as day, so the substitution
+  cannot turn a daylight panel into a night one (same rule T3 set).
+- `AMBIENT_NIGHT_SKY = False` restores the old day glyphs.
+- An unknown condition is never in `NIGHT_GLYPHS`, so it draws exactly what it
+  drew before (the `cloud` fallback).
+
+### Host results
+
+pytest 85 passed; ruff clean; **test_ambient 22/22** (was 17) - five new cases:
+a clear night shows the moon and not the sun (and day is unchanged), a partly
+night puts the moon behind the cloud, a rainy night keeps its glyph, the
+`AMBIENT_NIGHT_SKY` opt-out, and the night sky riding the existing
+`BRIGHTNESS_WEATHER_NIGHT` dim rather than the daytime weather level.
+
+### Not done / still open
+
+- **Not seen on the panel yet.** The glyphs are checked here by a host raster
+  (composition, inks, brightness) and by eye in `scripts/preview-icons.py`, but
+  the wall is the judge - and "does the crescent read as a moon at 11 px" is a
+  wall question, not a test one. Run the preview on the board before trusting
+  it; if the crescent reads as a blob, the fallback is a fattened moon or a
+  fuller disc (colour, not shape, is what separates it from the sun).
+- **The night sky is one static frame**, like every glyph but `rain`. A slow
+  twinkle is possible (the rain already proves multi-frame animation works at
+  the idle cadence) but the panel is furniture and mostly still is the rule.

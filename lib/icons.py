@@ -258,6 +258,56 @@ _PARTLY = (
     "SSSSSSSSSSS",
 )
 
+# -- the night sky -----------------------------------------------------------
+#
+# After sunset the panel must NOT draw the sun: a clear night under a gold disc
+# is simply the wrong sky, and it is what the panel did until now (the `sun`
+# condition is only ever "code 0", which Open-Meteo reports all night too). So
+# the two conditions whose glyph is a LIGHT SOURCE - `sun` and `partly` - swap
+# their sun for a moon once `is_day` is 0 (see ambient.NIGHT_GLYPHS). Every
+# other condition (cloud, rain, snow, fog, thunder) is already honest at night
+# and keeps its glyph.
+#
+# The night glyphs use the same ink vocabulary as the day set, so no new drawer
+# is needed: 'X' moon body, 'L' the moon's lit limb, 'S' its shaded inner edge,
+# 'O' the stars (the ACCENT ink - the one colour that is not the moon's).
+#
+# A word on the STAR INK: it is single pixels on purpose. A star is a point,
+# and at 11 px a point is exactly what it should be - the "no single-column
+# spire" rule is about a cloud APEX reading as an antenna, not about stars.
+# They are scattered rather than gridded so the field does not read as noise.
+_NIGHT = (
+    "...........",
+    "....LS...O.",
+    "...LXS..O..",
+    "...LXS.....",
+    "..LXS.O....",
+    "..LXS......",
+    "..LXS.....O",
+    "...LXS.....",
+    "...LXS..O..",
+    "....LS.....",
+    "...........",
+)
+
+# The same crescent, small, where `partly`'s sun used to sit - the cloud below
+# is untouched, so a partly-cloudy night is a moon behind a cloud rather than a
+# second moon-and-stars. The moon here is ALL accent ink: the 'L'/'S' pens in
+# this glyph belong to the cloud, so the moon cannot borrow them.
+_PARTLY_NIGHT = (
+    "..OO.......",
+    ".OOO.......",
+    ".OO........",
+    ".OOO.......",
+    "..OO.LLL...",
+    "....LLLLL..",
+    "...LLLLLLL.",
+    "..XXXXXXXXX",
+    ".XXXXXXXXXX",
+    "XXXXXXXXXXX",
+    "SSSSSSSSSSS",
+)
+
 # The cloud is the only SHADED glyph. Its shape and looks are lifted from
 # classic pixel-art cloud icons (the blocky, stair-stepped kind used for game
 # skies): a wide silhouette of uneven TERRACES - not smooth curves - lit from
@@ -377,6 +427,10 @@ WEATHER_ICONS = {
     "rain": _RAIN,  # already a tuple of frames - see _rain_frame
     "snow": (_SNOW,),
     "thunder": (_THUNDER,),
+    # The after-sunset substitutions for the two sunny conditions - see _NIGHT.
+    # Keyed here so weather_icon_width / draw_weather_icon need no new API.
+    "night": (_NIGHT,),
+    "partly-night": (_PARTLY_NIGHT,),
 }
 
 WEATHER_ICON_W = 11

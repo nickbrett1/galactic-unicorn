@@ -7,9 +7,11 @@ the display directly:
 
 Why it exists: there is no way to ask the board for "show me rain". The
 condition comes from Open-Meteo, so seeing a specific glyph used to mean
-waiting for the right weather - or editing the tree. This paints all seven
+waiting for the right weather - or editing the tree. This paints all nine
 in turn with the same palettes and the same brightness the idle screen uses,
-so what you see here is what you get in production.
+so what you see here is what you get in production. The last two are the
+after-sunset glyphs (the moon-and-stars night sky, and the partly-cloudy
+night), which the idle screen only reaches once the sun is down.
 
 Each condition is held for HOLD_MS with a label and a representative
 temperature, composed exactly like ambient._draw_weather (icon and digits
@@ -61,9 +63,16 @@ LABELS = {
     "rain": "12C",
     "snow": "-3C",
     "thunder": "19C",
+    # The after-sunset glyphs. Their labels are night-like readings only so the
+    # frame is composed like a real one - the moon/stars are drawn regardless.
+    "night": "8C",
+    "partly-night": "6C",
 }
 
-ORDER = ["sun", "partly", "cloud", "fog", "rain", "snow", "thunder"]
+ORDER = [
+    "sun", "partly", "cloud", "fog", "rain", "snow", "thunder",
+    "night", "partly-night",
+]
 
 
 def draw(d, condition, label):
@@ -75,9 +84,7 @@ def draw(d, condition, label):
     icon_w = icons.weather_icon_width(condition) or icons.WEATHER_ICON_W
     span = icon_w + ambient.WEATHER_GAP + bigfont.text_width(label)
     x = max(0, (d.width - span) // 2)
-    body, lit, shade, accent = ambient.WEATHER_PENS.get(
-        condition, ambient.WEATHER_PENS["cloud"]
-    )
+    body, lit, shade, accent = ambient.pens_for(condition)
     d.clear()
     d.power_pixel()
     icons.draw_weather_icon(

@@ -16,6 +16,10 @@ glow in a child's bedroom, but the lamp stays - a dark room is exactly when "is
 this on?" cannot be answered any other way. The weather stays too, because the
 phototransistor reads a shaded desk as dark while the room is lit: see
 draw_dark and config.AMBIENT_WEATHER_IN_DARK.
+
+After sunset the two sunny conditions - the only glyphs that are a light
+source - are replaced by a night sky (a moon and stars), so the panel never
+draws a sun in a dark room; see NIGHT_GLYPHS and config.AMBIENT_NIGHT_SKY.
 """
 
 import time
@@ -60,6 +64,22 @@ CLOUD_RIM_RGB = (84, 88, 95)
 # The sun's single gold. Flat by design - see WEATHER_PENS.
 SUN_RGB = (170, 140, 32)
 
+# The night sky, drawn after sunset in place of the sun (ambient.NIGHT_GLYPHS).
+#
+# The moon is a cool pale blue-white rather than the sun's gold, so the panel
+# reads as night at a glance; the lit limb is brighter than the body and the
+# inner edge darker, the same lit-from-one-side shading the day cloud uses. The
+# stars are a dimmer, cooler ink again - points of light, not a second moon.
+#
+# These sit at the night brightness (BRIGHTNESS_WEATHER_NIGHT, 0.22), where the
+# daytime weather colours would glare: the moon lands around the top of the
+# cloud-palette range, so it is the clearest thing on the frame without being a
+# lamp in a dark room.
+MOON_RGB = (150, 165, 205)
+MOON_LIT_RGB = (205, 220, 250)
+MOON_SHADE_RGB = (70, 85, 130)
+STAR_RGB = (120, 140, 190)
+
 # One palette per condition: (body, lit, shade, accent). Every weather glyph is
 # shaded the same way ('X' body, 'L' lit top, 'S' shade), and 'O' is the ACCENT
 # ink - the rim on the cloud, the sun in `partly`, the drops / flakes / bolt
@@ -78,6 +98,29 @@ WEATHER_PENS = {
     "snow": ((110, 140, 160), (170, 195, 210), (60, 90, 115), (200, 225, 235)),
     "thunder": ((80, 105, 130), (120, 150, 175), (38, 62, 88), (210, 185, 40)),
 }
+
+# The after-sunset palettes, keyed by the night GLYPH names in lib/icons.py.
+# Same (body, lit, shade, accent) shape as WEATHER_PENS.
+#
+# `partly-night` is a moon BEHIND a cloud, so its body/lit/shade are the
+# daytime cloud greys and only the accent (the moon) is repainted - otherwise
+# the cloud would turn blue-white in the dark.
+NIGHT_PENS = {
+    "night": (MOON_RGB, MOON_LIT_RGB, MOON_SHADE_RGB, STAR_RGB),
+    "partly-night": (CLOUD_BODY_RGB, CLOUD_LIT_RGB, CLOUD_SHADE_RGB, MOON_RGB),
+}
+
+# The two conditions whose daytime glyph is a LIGHT SOURCE, and the night glyph
+# that replaces each once is_day is 0. Every other condition is already honest
+# after dark and is left alone.
+NIGHT_GLYPHS = {"sun": "night", "partly": "partly-night"}
+
+
+def pens_for(glyph):
+    """The (body, lit, shade, accent) palette for a condition or night glyph."""
+    return NIGHT_PENS.get(glyph) or WEATHER_PENS.get(glyph, WEATHER_PENS["cloud"])
+
+
 BREATH_PERIOD_MS = 4000
 
 # Rebuild the clock string at most this often. The display only shows HH:MM,
@@ -144,21 +187,33 @@ class Ambient:
         bare integer with a trailing C - "18C", "-5C" - because the font has no
         degree glyph and a whole degree is all the panel needs to say.
 
-        Only `cloud` is shaded: its glyph carries extra inks for the lit top
-        ('L'), the shadowed base ('S') and a grey flank edge ('O'). Everything
-        else is a single ink, so the digits and the other icons stay one colour.
+        The palette comes from `pens_for` - the day table (`WEATHER_PENS`) or,
+        after sunset, the night table (`NIGHT_PENS`), both in the same (body,
+        lit, shade, accent) shape (see lib/icons.py for the ink vocabulary). A
+        single-ink glyph simply leaves the extra pens unused, so a flat
+        condition and a shaded one cost the drawer the same. The digits stay on
+        WEATHER_RGB either way.
         """
         d = self.display
         condition = self.weather.condition or "cloud"
+        # After sunset the sunny glyphs become the night sky (moon + stars),
+        # never the gold sun. A missing is_day falls on the DAY side (the flag
+        # only ever changes what is drawn after dark, and a reading that
+        # predates it must not turn a daylight panel into a night one), and
+        # AMBIENT_NIGHT_SKY=False opts the whole substitution out.
+        if not getattr(self.weather, "is_day", True) and getattr(
+            self.config, "AMBIENT_NIGHT_SKY", True
+        ):
+            glyph = NIGHT_GLYPHS.get(condition, condition)
+        else:
+            glyph = condition
         label = _format_temp(self.weather.temp_c)
-        icon_w = icons.weather_icon_width(condition) or icons.WEATHER_ICON_W
+        icon_w = icons.weather_icon_width(glyph) or icons.WEATHER_ICON_W
         span = icon_w + WEATHER_GAP + bigfont.text_width(label)
         x = max(0, (d.width - span) // 2)
-        body, lit, shade, accent = WEATHER_PENS.get(
-            condition, WEATHER_PENS["cloud"]
-        )
+        body, lit, shade, accent = pens_for(glyph)
         icons.draw_weather_icon(
-            d, condition, x, 0, age_ms=phase_ms,
+            d, glyph, x, 0, age_ms=phase_ms,
             rgb=body, rim_rgb=accent, lit_rgb=lit, shade_rgb=shade,
         )
         bigfont.draw_text(d, x + icon_w + WEATHER_GAP, 0, label, rgb=WEATHER_RGB)

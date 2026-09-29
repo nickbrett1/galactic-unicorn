@@ -180,10 +180,20 @@ condition glyph plus the temperature in Celsius — e.g. a cloud and `14C`.
   the real sunset for the location and rides along free in the request the board
   already makes. A reading without the flag is treated as day, so a missing
   field can only ever leave the panel at its normal brightness.
+- **Night sky after sunset:** once the sun is down, the two conditions whose
+  glyph is a *light source* — `sun` and `partly` — swap their sun for a moon
+  (`_NIGHT`: a crescent with a scatter of stars; `_PARTLY_NIGHT`: the same
+  crescent behind the cloud). Open-Meteo reports code 0 (clear) all night, so
+  without this the panel drew a gold sun at midnight. Every other condition
+  (cloud, rain, snow, fog, thunder) is already honest after dark and keeps its
+  glyph — a wet night is still rain. Set `AMBIENT_NIGHT_SKY = False` to get the
+  sun back.
 
 The conditions are drawn from `lib/icons.py` (`WEATHER_ICONS`), mapped from
 Open-Meteo's WMO codes by `lib/weather.py:classify` — sun, partly cloudy,
-cloud, fog, rain, snow and thunder. All are drawn as filled silhouettes, and
+cloud, fog, rain, snow and thunder, plus the two after-sunset glyphs (`night`
+and `partly-night`) the renderer reaches for once `is_day` is 0. All are drawn
+as filled silhouettes, and
 every cloud shares one rule — a **flat base with humps on top**. A bare
 silhouette is hard to read at 11 px: an oval tapers into a teardrop, a slab
 reads as a brick, and the rain cloud without its drops reads as a blob.
@@ -192,9 +202,12 @@ Every glyph is **shaded** the same way, with the same ink vocabulary: a mid
 **body** (`'X'`), a **lit** top (`'L'`) and a **shaded** underside (`'S'`), plus
 an **accent** ink (`'O'`) for the one element that needs a different colour —
 the rim on the cloud, the sun in `partly`, the drops in `rain`, the flakes in
-`snow`, the bolt in `thunder`. Each condition has its own small palette in
-`ambient.WEATHER_PENS` (body, lit, shade, accent), so the icons read as a lit,
-colour-coded set rather than a row of flat blue stamps.
+`snow`, the bolt in `thunder`, the stars in `night`. Each condition has its own
+small palette in `ambient.WEATHER_PENS` (body, lit, shade, accent), so the icons
+read as a lit, colour-coded set rather than a row of flat blue stamps. The two
+night glyphs have their palettes in `ambient.NIGHT_PENS` — the moon is a cool
+blue-white rather than the sun's gold, so the panel reads as night at a glance;
+`ambient.pens_for` is the lookup that both tables go through.
 
 The exception is the **sun**, which is flat: all four of its inks are the same
 gold. A light source should not be lit and shaded like a solid object, and a
@@ -249,7 +262,8 @@ the real panel:
 .venv/bin/mpremote connect /dev/tty.<board> run scripts/preview-icons.py
 ```
 
-It paints all seven in turn at the idle screen's own palettes and brightness,
+It paints all nine (the seven conditions plus the two night glyphs) in turn at
+the idle screen's own palettes and brightness,
 then soft-resets so `main.py` takes the panel back (you do not have to restart
 it). `mpremote run` takes no script arguments, so the pace and a single-glyph
 mode are set by a global in the REPL namespace instead, both in one invocation:

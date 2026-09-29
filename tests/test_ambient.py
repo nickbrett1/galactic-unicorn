@@ -113,6 +113,7 @@ class FakeConfig:
     LIGHT_DIM = 400
     UTC_OFFSET_S = 0
     AMBIENT_WEATHER_IN_DARK = True
+    AMBIENT_NIGHT_SKY = True
 
 
 class FakeWeather:
@@ -498,6 +499,117 @@ def case_a_missing_day_flag_stays_bright():
     return body()
 
 
+def night_inks(d):
+    """The pens on the frame, minus the white power lamp."""
+    return {p[2] for p in d.graphics.pixels if p[2] != (255, 255, 255)}
+
+
+def case_a_clear_night_shows_the_moon_not_the_sun():
+    """After sunset the `sun` condition draws the night sky, never the gold sun.
+
+    Open-Meteo reports weather_code 0 (clear) at midnight too, so before this
+    the panel drew a sun in a dark room - the wrong sky. is_day=0 must swap it
+    for the moon and stars, and is_day=1 must leave the sun exactly as it was.
+    """
+
+    def body():
+        d_day, a_day = fresh_with_weather(condition="sun", is_day=True)
+        a_day.draw(0)
+        day = night_inks(d_day)
+        d_night, a_night = fresh_with_weather(condition="sun", is_day=False)
+        a_night.draw(0)
+        night = night_inks(d_night)
+        sun = ambient.SUN_RGB
+        moon = {
+            ambient.MOON_RGB,
+            ambient.MOON_LIT_RGB,
+            ambient.MOON_SHADE_RGB,
+            ambient.STAR_RGB,
+        }
+        return report(
+            "a clear night draws the moon and stars, not the sun",
+            sun in day and moon <= night and sun not in night,
+            f"day_sun={sun in day} night_missing={sorted(moon - night)} "
+            f"night_has_sun={sun in night}",
+        )
+
+    return body()
+
+
+def case_a_partly_night_puts_the_moon_behind_the_cloud():
+    """`partly` after sunset keeps its cloud but swaps the amber sun for a moon."""
+
+    def body():
+        d, a = fresh_with_weather(condition="partly", is_day=False)
+        a.draw(0)
+        inks = night_inks(d)
+        return report(
+            "a partly-cloudy night is a moon behind a cloud",
+            ambient.SUN_RGB not in inks
+            and ambient.MOON_RGB in inks
+            and ambient.CLOUD_BODY_RGB in inks,
+            f"sun={ambient.SUN_RGB in inks} moon={ambient.MOON_RGB in inks} "
+            f"cloud={ambient.CLOUD_BODY_RGB in inks}",
+        )
+
+    return body()
+
+
+def case_a_rainy_night_keeps_its_glyph():
+    """Only the sunny conditions swap: a wet night is still rain, not a moon."""
+
+    def body():
+        d, a = fresh_with_weather(condition="rain", is_day=False)
+        a.draw(0)
+        inks = night_inks(d)
+        return report(
+            "a rainy night keeps the rain glyph (no moon)",
+            ambient.MOON_RGB not in inks
+            and ambient.MOON_LIT_RGB not in inks
+            and set(ambient.WEATHER_PENS["rain"]) <= inks,
+            f"moon={ambient.MOON_RGB in inks or ambient.MOON_LIT_RGB in inks} "
+            f"missing={sorted(set(ambient.WEATHER_PENS['rain']) - inks)}",
+        )
+
+    return body()
+
+
+def case_the_night_sky_can_be_turned_off():
+    """AMBIENT_NIGHT_SKY=False restores the sun after sunset."""
+
+    def body():
+        class DayOff(FakeConfig):
+            AMBIENT_NIGHT_SKY = False
+
+        d = display.Display(DayOff())
+        a = ambient.Ambient(d, DayOff(), FakeWeather(condition="sun", is_day=False))
+        a.ntp_ok = True
+        a.draw(0)
+        inks = night_inks(d)
+        return report(
+            "with the flag off, a clear night shows the sun again",
+            ambient.SUN_RGB in inks and ambient.MOON_RGB not in inks,
+            f"sun={ambient.SUN_RGB in inks} moon={ambient.MOON_RGB in inks}",
+        )
+
+    return body()
+
+
+def case_the_night_sky_draws_at_the_night_level():
+    """The night sky rides the existing sunset dim, not the daytime weather level."""
+
+    def body():
+        d, a = fresh_with_weather(condition="sun", is_day=False)
+        a.draw(0)
+        return report(
+            "the night sky draws at BRIGHTNESS_WEATHER_NIGHT",
+            d.gu.brightness == FakeConfig.BRIGHTNESS_WEATHER_NIGHT,
+            f"brightness={d.gu.brightness}",
+        )
+
+    return body()
+
+
 def case_weather_is_always_shown():
     """No alternation: every idle frame is the weather, not the clock."""
 
@@ -577,6 +689,11 @@ def main():
         case_weather_raises_the_idle_brightness(),
         case_night_dims_the_weather(),
         case_a_missing_day_flag_stays_bright(),
+        case_a_clear_night_shows_the_moon_not_the_sun(),
+        case_a_partly_night_puts_the_moon_behind_the_cloud(),
+        case_a_rainy_night_keeps_its_glyph(),
+        case_the_night_sky_can_be_turned_off(),
+        case_the_night_sky_draws_at_the_night_level(),
         case_weather_is_always_shown(),
         case_no_reading_falls_back_to_the_clock(),
         case_weather_lamp_is_drawn_after_the_clear(),

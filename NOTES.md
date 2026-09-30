@@ -751,10 +751,22 @@ Host results: pytest 98 passed (was 85); ruff clean; test_ambient 27/27 (was 22)
 
 ### Not done / still open
 
-- **Not seen on the panel / against the real service yet.** The pieces are
-  pinned on the host; the end-to-end path (page → `/api/message` → poll →
-  scroll → `message_id` → "showing on the panel") needs the board on the LAN
-  with the service up. That is the eye test, as ever.
+- **Verified end-to-end 2026-09-30**, but only once the board was actually
+  running the fix. The first "still nothing" report was a red herring: the board
+  was on **fw 0.1.46** (2026-09-28), which predates all banner code. The service
+  side was checked directly — `POST /api/message {"text":"Hello"}` → the poll
+  answered `{"gen":..,"action":"none","next_poll_ms":..,"message":{"id":6,
+  "text":"Hello"}}` — and the board then reported `message_id=6`, i.e. it was
+  drawing it. After the 120 s TTL both the server slot and the board's
+  `message_id` cleared together. So the chain page → `/api/message` → poll →
+  scroll → `message_id` → "showing on the panel" is proven; the earlier failure
+  was a delivery problem, not a code one.
+- **OTA landing is slow and looks like a bug.** The board's boot-time WiFi join
+  often misses ("no wifi at boot, skipping update"), so the update falls to the
+  in-loop retry on `UPDATE_RETRY_MS` (15 min). On 2026-09-30 the board went
+  0.1.46 → 0.1.48 roughly a quarter of an hour after the reboot. Nothing to fix
+  — but "rebooted and still on the old version" has this cause, and the check is
+  the `fw` field in `GET /api/state`, not the panel.
 - **Stale banner if the link is down for a whole countdown.** The board clears
   the banner on the first poll that reports it has left AMBIENT, which is the
   contract's mechanism; if the radio is down for the entire countdown, the last

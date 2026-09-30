@@ -62,6 +62,32 @@ PANEL_STATES = (STATE_AMBIENT, STATE_PROMPT, STATE_COUNTDOWN, STATE_HANDOFF)
 # is live in all three (memo section 3; device-protocols.md section 2).
 ACTIVE_STATES = (STATE_PROMPT, STATE_COUNTDOWN, STATE_HANDOFF)
 
+
+ACTIVE_STATES = (STATE_PROMPT, STATE_COUNTDOWN, STATE_HANDOFF)
+
+
+def banner_for(message, state):
+    """The idle banner to scroll, as a `(id, text)` pair, or None.
+
+    device-protocols.md section 3.0: a parent can ask the panel to scroll a
+    short message across its IDLE screen. It is content, not an event - it is
+    relayed on the poll like the weather, moves no `gen`, and is drawn only in
+    AMBIENT (a scroll over a running countdown would say nothing true).
+
+    None means "no banner": an absent slot, a panel that is not idle, or a
+    payload missing either half of the pair. The id is required because the
+    board acknowledges the banner by reporting it back as `message_id` - a
+    message it cannot identify is one it cannot confirm, so half a payload is
+    no banner rather than a silent one.
+    """
+    if state != STATE_AMBIENT or not message:
+        return None
+    text = message.get("text")
+    mid = message.get("id")
+    if not text or mid is None:
+        return None
+    return (mid, str(text))
+
 # Decision kinds returned by decide().
 DECISION_APPLY = "apply"
 DECISION_NOOP = "noop"
@@ -288,7 +314,7 @@ def decide(desired, applied_gen, panel, now_epoch_s):
 
 def build_report(report, boot, fw, applied_gen, state, routine=None,
                  remaining_s=None, rssi=None, uptime_s=None, wedge=None,
-                 reset_cause=None, temp_c=None, condition=None):
+                 reset_cause=None, temp_c=None, condition=None, message_id=None):
     """Fill the observed-state JSON, in place, from one snapshot.
 
     `report` is a caller-owned dict, allocated ONCE and reused on every poll,
@@ -345,5 +371,14 @@ def build_report(report, boot, fw, applied_gen, state, routine=None,
     else:
         report["temp_c"] = temp_c
         report["condition"] = condition
+
+    # The idle banner the board is drawing, as an acknowledgement
+    # (device-protocols.md section 3.0): "the id I am scrolling right now". A
+    # bar on zero is a real id, so test `is None` and not truthiness. Cleared
+    # when there is no banner, so a reused dict never claims a stale one.
+    if message_id is None:
+        report.pop("message_id", None)
+    else:
+        report["message_id"] = message_id
 
     return report

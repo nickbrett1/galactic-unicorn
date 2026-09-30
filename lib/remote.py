@@ -165,6 +165,12 @@ def poll_path(report, token):
         parts.append("temp_c=" + str(report["temp_c"]))
     if "condition" in report:
         parts.append("condition=" + str(report["condition"]))
+    # The idle banner the board is DRAWING right now, echoed back so the UI can
+    # go "sending..." -> "showing on the panel" (device-protocols.md section
+    # 3.0). Only present while a banner is actually up, which is why
+    # build_report clears it otherwise.
+    if "message_id" in report:
+        parts.append("message_id=" + str(report["message_id"]))
     return "/device/poll?" + "&".join(parts)
 
 
@@ -441,6 +447,21 @@ class Remote:
         self.log_file = getattr(config, "REMOTE_LOG_FILE", "remote.log")
         self.join_attempts = int(getattr(config, "REMOTE_WIFI_ATTEMPTS", 1))
         self.join_attempt_ms = int(getattr(config, "REMOTE_WIFI_ATTEMPT_MS", 10000))
+
+        # The idle banner (device-protocols.md section 3.0): the short text the
+        # service asks the panel to scroll across its AMBIENT screen, and the
+        # id the board echoes back as `message_id`. None = no banner. This is
+        # the whole of the board's banner state; the idle renderer
+        # (lib/ambient.py) reads text/at, and _build_report relays id. It is
+        # deliberately NOT a gen and NOT an event: nothing here touches the
+        # reconcile loop above.
+        self.message_id = None
+        self.message_text = None
+        # The ticks_ms the CURRENT banner started (a new id restarts the
+        # scroll). Read by the renderer to place the text, so it is a board
+        # clock, never a wall clock - the banner has no TTL on the board; the
+        # SERVER stops sending it and the next poll clears it.
+        self.message_at = 0
 
         self.boot = _new_boot_id()
         self.applied_gen = _read_gen(self.gen_file)
@@ -771,6 +792,12 @@ class Remote:
         if self.weather is not None and getattr(self.weather, "ok", False):
             temp_c = int(self.weather.temp_c)
             condition = self.weather.condition
+        # Acknowledge the banner ONLY while it is actually being drawn: the
+        # screen is idle, so the wire state is AMBIENT. Leaving AMBIENT (a
+        # countdown started) drops it here and in _update_banner alike, so the
+        # server's "board left AMBIENT -> drop the banner" rule (section 3.0)
+        # is satisfied from both ends.
+        message_id = self.message_id if state == reconcile.STATE_AMBIENT else None
         return reconcile.build_report(
             self.report,
             self.boot,
@@ -785,11 +812,34 @@ class Remote:
             reset_cause=self.reset_cause,
             temp_c=temp_c,
             condition=condition,
+            message_id=message_id,
         )
+
+    def _update_banner(self, desired, state):
+        """Adopt or drop the idle banner from this poll (section 3.0).
+
+        A banner is relayed on every poll like the weather, so the slot the
+        board holds is simply "what the last poll said": present -> scroll it,
+        absent (or the panel is no longer AMBIENT) -> drop it. No clock is
+        compared here - the server owns the TTL and stops sending it. A NEW id
+        restarts the scroll from the right edge; the same id re-sent leaves the
+        scroll where it is, so a 2 s poll does not make the text stutter.
+        """
+        banner = reconcile.banner_for(desired.get("message"), state)
+        if banner is None:
+            self.message_id = None
+            self.message_text = None
+        elif banner[0] != self.message_id:
+            self.message_id = banner[0]
+            self.message_text = banner[1]
+            self.message_at = time.ticks_ms()
 
     def _apply(self, desired, report, now):
         self.panel["state"] = report["state"]
         self.panel["routine"] = report.get("routine")
+        # Banner BEFORE decide: it is independent of the reconcile loop (it is
+        # content, not an event) and travels in the same response.
+        self._update_banner(desired, report["state"])
         # No wall clock on the board (section 3): `now_epoch_s` is only for the
         # defensive TTL, and the server never sends expires_at, so 0 is honest.
         kind, detail = reconcile.decide(desired, self.applied_gen, self.panel, 0)

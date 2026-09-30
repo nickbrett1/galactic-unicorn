@@ -364,3 +364,48 @@ def test_build_report_drops_a_half_supplied_weather_pair():
     for report in (only_temp, only_condition):
         assert "temp_c" not in report
         assert "condition" not in report
+
+
+# -- the idle banner (device-protocols.md section 3.0) ------------------------
+
+def test_banner_for_returns_the_pair_in_ambient():
+    assert reconcile.banner_for({"id": 4, "text": "Hello"}, "ambient") == (4, "Hello")
+
+
+def test_banner_for_is_idle_only():
+    # A scroll over a running countdown would say nothing true, so the banner
+    # is drawn in AMBIENT and nowhere else (section 3.0).
+    for state in ("prompt", "countdown", "handoff"):
+        assert reconcile.banner_for({"id": 4, "text": "Hello"}, state) is None
+
+
+def test_banner_for_needs_both_halves():
+    # The id is what the board acknowledges the banner by; a message it cannot
+    # identify is one it cannot confirm, so half a payload is no banner.
+    assert reconcile.banner_for({"text": "Hello"}, "ambient") is None
+    assert reconcile.banner_for({"id": 4}, "ambient") is None
+    assert reconcile.banner_for({"id": 4, "text": ""}, "ambient") is None
+
+
+def test_banner_for_tolerates_a_missing_slot():
+    assert reconcile.banner_for(None, "ambient") is None
+    assert reconcile.banner_for({}, "ambient") is None
+
+
+def test_build_report_carries_the_message_id():
+    # The board acknowledges the banner by reporting the id it is scrolling.
+    report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", message_id=4)
+    assert report["message_id"] == 4
+
+
+def test_build_report_keeps_a_zero_message_id():
+    # id 0 is a real id, not "absent" - the same rule as remaining_s and rssi.
+    report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", message_id=0)
+    assert report["message_id"] == 0
+
+
+def test_build_report_reuse_clears_the_message_id():
+    # A reused dict must not claim a banner the board is no longer drawing.
+    report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", message_id=4)
+    reconcile.build_report(report, "b1", "0.2.0", 4, "ambient")
+    assert "message_id" not in report

@@ -610,6 +610,117 @@ def case_the_night_sky_draws_at_the_night_level():
     return body()
 
 
+class FakeBanner:
+    """The attributes Ambient reads off its banner source (lib/remote.py)."""
+
+    def __init__(self, text=None, at=0, mid=1):
+        self.message_text = text
+        self.message_at = at
+        self.message_id = mid if text else None
+
+
+def fresh_with_banner(text="Hello", at=0, **kw):
+    """A Display + Ambient with a weather reading AND an idle banner."""
+    d, a = fresh_with_weather(**kw)
+    a.banner = FakeBanner(text, at)
+    return d, a
+
+
+def case_banner_replaces_the_idle_screen():
+    """A live banner takes the frame; the weather glyph does not draw under it."""
+
+    def body():
+        _TICKS[0] = 0
+        d, a = fresh_with_banner("Hello", at=0)
+        a.draw(0)
+        g = d.graphics
+        # The banner uses text(); the weather glyph uses rectangles. So with a
+        # banner the frame is one text call and nothing but the lamp pixel.
+        return report(
+            "an idle banner takes over the idle screen",
+            bool(g.texts) and len(g.pixels) == 1,
+            f"texts={g.texts} pixels={len(g.pixels)}",
+        )
+
+    return body()
+
+
+def case_banner_scrolls_left_over_time():
+    """Successive frames place the same text further left."""
+
+    def body():
+        d, a = fresh_with_banner("Hello", at=0)
+        _TICKS[0] = 0
+        a.draw(0)
+        first = d.graphics.texts[-1][1]
+        _TICKS[0] = 1000
+        a.draw(1000)
+        second = d.graphics.texts[-1][1]
+        _TICKS[0] = 2000
+        a.draw(2000)
+        third = d.graphics.texts[-1][1]
+        return report(
+            "the banner scrolls right to left across the panel",
+            first > second > third,
+            f"x={first},{second},{third}",
+        )
+
+    return body()
+
+
+def case_no_banner_keeps_the_weather():
+    """A source with no live text leaves the idle screen exactly as it was."""
+
+    def body():
+        d, a = fresh_with_weather()
+        a.banner = FakeBanner(None)
+        a.draw(0)
+        g = d.graphics
+        return report(
+            "no banner -> the weather draws as usual",
+            not g.texts and len(g.pixels) > 1,
+            f"texts={g.texts} pixels={len(g.pixels)}",
+        )
+
+    return body()
+
+
+def case_banner_shows_in_a_dark_room():
+    """A message a parent asked for is content, so it survives the dark room."""
+
+    def body():
+        _TICKS[0] = 0
+        d, a = fresh_with_banner("Hello", at=0)
+        a.draw_dark()
+        g = d.graphics
+        return report(
+            "a dark room keeps the lamp AND the banner",
+            bool(g.texts) and g.pixels == [(0, 0, WHITE)],
+            f"texts={g.texts} pixels={g.pixels}",
+        )
+
+    return body()
+
+
+def case_banner_ignores_a_source_without_the_attribute():
+    """An older/partial banner source must not raise (getattr, every frame)."""
+
+    def body():
+        class NoAttrs:
+            pass
+
+        d, a = fresh_with_weather()
+        a.banner = NoAttrs()
+        a.draw(0)
+        return report(
+            "a banner source with no message_text draws the weather",
+            not d.graphics.texts and len(d.graphics.pixels) > 1,
+            f"texts={d.graphics.texts}",
+        )
+
+    return body()
+
+
 def case_weather_is_always_shown():
     """No alternation: every idle frame is the weather, not the clock."""
 
@@ -694,6 +805,11 @@ def main():
         case_a_rainy_night_keeps_its_glyph(),
         case_the_night_sky_can_be_turned_off(),
         case_the_night_sky_draws_at_the_night_level(),
+        case_banner_replaces_the_idle_screen(),
+        case_banner_scrolls_left_over_time(),
+        case_no_banner_keeps_the_weather(),
+        case_banner_shows_in_a_dark_room(),
+        case_banner_ignores_a_source_without_the_attribute(),
         case_weather_is_always_shown(),
         case_no_reading_falls_back_to_the_clock(),
         case_weather_lamp_is_drawn_after_the_clear(),

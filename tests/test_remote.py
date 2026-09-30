@@ -394,3 +394,59 @@ def test_poll_path_omits_the_weather_when_there_is_no_reading():
     path = remote.poll_path(_report(), "tok")
     assert "temp_c=" not in path
     assert "condition=" not in path
+
+
+# -- the idle banner the board is drawing (device-protocols.md section 3.0) ----
+
+def test_poll_path_carries_the_message_id():
+    path = remote.poll_path(_report(message_id=4), "tok")
+    assert "message_id=4" in path
+
+
+def test_poll_path_omits_the_message_id_when_no_banner():
+    assert "message_id=" not in remote.poll_path(_report(), "tok")
+
+
+class _BannerSelf:
+    """The attributes _update_banner touches, so the glue is testable alone."""
+
+    def __init__(self):
+        self.message_id = None
+        self.message_text = None
+        self.message_at = 0
+
+
+def test_update_banner_adopts_then_keeps_the_id():
+    s = _BannerSelf()
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    assert s.message_id == 4
+    assert s.message_text == "Hi"
+    started = s.message_at
+    # The same id re-sent on the next 2 s poll must NOT restart the scroll.
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    assert s.message_at == started
+
+
+def test_update_banner_restarts_on_a_new_id():
+    s = _BannerSelf()
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    remote.Remote._update_banner(s, {"message": {"id": 5, "text": "Bye"}}, "ambient")
+    assert s.message_id == 5
+    assert s.message_text == "Bye"
+
+
+def test_update_banner_drops_when_the_slot_is_gone():
+    s = _BannerSelf()
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    remote.Remote._update_banner(s, {"action": "none"}, "ambient")
+    assert s.message_id is None
+    assert s.message_text is None
+
+
+def test_update_banner_drops_when_the_panel_leaves_ambient():
+    # Idle-only: a countdown starting must stop the scroll and stop the ack.
+    s = _BannerSelf()
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "countdown")
+    assert s.message_id is None
+    assert s.message_text is None

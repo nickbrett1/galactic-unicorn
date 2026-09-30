@@ -469,6 +469,11 @@ def main():
     # means the poll carries no temp_c/condition.
     if remote is not None:
         remote.weather = weather
+        # ...and hand the ambient renderer the same object as its banner
+        # source, so the idle screen can scroll a message the service relays
+        # (lib/remote.py, device-protocols.md section 3.0). One object, two
+        # roles: the poll owns the banner state, the renderer only reads it.
+        ambient.banner = remote
 
     # Collect proactively rather than only when an allocation fails: the
     # default (-1) lets the heap run to the wire, and an allocation failure at
@@ -533,9 +538,11 @@ def main():
             remote, retryable = _attach_remote(engine, config, log, firmware_version())
             if remote is not None:
                 # Same hand-off as at boot: a remote that finally built must
-                # report the weather too, or a late attach would silently stop
-                # the page updating until the next reset.
+                # report the weather AND drive the idle banner too, or a late
+                # attach would silently stop the page updating until the next
+                # reset.
                 remote.weather = weather
+                ambient.banner = remote
             if remote is None:
                 if not retryable:
                     remote_retries = 0

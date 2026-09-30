@@ -129,6 +129,23 @@ CLOCK_REBUILD_MS = 1000
 
 WEATHER_GAP = 2  # px between the weather icon and the temperature
 
+# The idle banner (device-protocols.md section 3.0): a short message the
+# service asks the panel to scroll across the idle screen. It takes the whole
+# frame while it is up - the panel has one screen for content, and a message
+# is the content a parent asked for.
+#
+# The ink is a pale, slightly warm white: a message is a deliberate, looked-at
+# thing (unlike the weather, which is furniture), so it should read at a
+# glance. It still draws at the weather brightness, so it is no brighter than
+# the idle screen already gets.
+BANNER_RGB = (198, 210, 226)
+# Scroll speed, px/s. ~4 characters a second: legible across a room, and a
+# short word crosses the 53 px panel in a couple of seconds.
+BANNER_PX_PER_S = 24
+# The gap, in px, between the tail of one pass and the head of the next, so the
+# text does not run straight into its own start.
+BANNER_GAP = 12
+
 
 def _format_temp(temp_c):
     """The temperature as the panel draws it: "-5C", "0C", "18C".
@@ -146,6 +163,12 @@ class Ambient:
         # Optional: a weather source (lib/weather.py). None, disabled or with no
         # reading yet all mean the same thing - the clock shows on every frame.
         self.weather = weather
+        # Optional: the idle banner source (lib/remote.py Remote), attached by
+        # main.py. None (or a source with no live message) is the normal idle
+        # screen. Duck-typed and read with getattr every frame - the renderer
+        # never imports the network module, and a source without the attribute
+        # simply has no banner.
+        self.banner = None
         self.ntp_ok = False
         self._label = None
         self._label_w = 0
@@ -218,6 +241,31 @@ class Ambient:
         )
         bigfont.draw_text(d, x + icon_w + WEATHER_GAP, 0, label, rgb=WEATHER_RGB)
 
+    def _banner_text(self):
+        """The message to scroll right now, or None. No allocation per frame."""
+        return getattr(self.banner, "message_text", None)
+
+    def _draw_banner(self):
+        """Scroll the idle banner across the panel, one line, right to left.
+
+        The frame's own `ticks_ms` clock places the text (the remote records the
+        ticks the message arrived), so the scroll is smooth and continuous
+        across frames and restarts cleanly when a new id arrives. The offset is
+        taken modulo (text + panel + gap), so the message loops with a gap until
+        the server stops sending it. Drawing off-panel is clipped by the
+        graphics layer, so no special-casing is needed at the edges.
+        """
+        d = self.display
+        text = self._banner_text()
+        elapsed = time.ticks_diff(time.ticks_ms(), getattr(self.banner, "message_at", 0))
+        # A banner that arrived "in the future" (a clock that wrapped) starts at
+        # the right edge rather than mid-panel.
+        elapsed = max(elapsed, 0)
+        span = d.text_width(text, scale=1) + d.width + BANNER_GAP
+        x = d.width - ((elapsed * BANNER_PX_PER_S) // 1000) % span
+        y = (d.height - 8) // 2
+        d.text(text, x, y, rgb=BANNER_RGB, scale=1)
+
     def _weather_brightness(self):
         """The brightness for a frame with a weather reading on it.
 
@@ -246,9 +294,12 @@ class Ambient:
 
     def draw(self, phase_ms):
         d = self.display
-        # routine.tick() has already set AMBIENT; raise it for the weather only
-        # (the clock fallback below keeps the dimmer level).
-        if self.weather is not None and self.weather.ok:
+        # routine.tick() has already set AMBIENT; raise it for the banner and
+        # the weather only (the clock fallback below keeps the dimmer level).
+        showing = self._banner_text() is not None or (
+            self.weather is not None and self.weather.ok
+        )
+        if showing:
             d.set_brightness(self._weather_brightness())
         d.clear()
         # The one thing here that is not a function of the network: a corner
@@ -261,11 +312,15 @@ class Ambient:
         # the panel is never once completely dark between power-on and the
         # countdown - not for a boot, and not for a clock that did not sync.
         d.power_pixel()
-        # The idle screen is the weather, permanently. The clock is only the
+        # The idle screen is the weather, permanently - except while a banner
+        # is up, when the message takes the frame (it is the content a parent
+        # asked for, idle-only by the wire contract). The clock is only the
         # fallback for the window before the first reading lands (or if weather
         # is disabled), so the panel is never blank; if NTP never synced either,
         # the breathing status pixel takes its place as before.
-        if self.weather is not None and self.weather.ok:
+        if self._banner_text() is not None:
+            self._draw_banner()
+        elif self.weather is not None and self.weather.ok:
             # phase_ms is the idle frame's own clock, so the rain animation is
             # smooth from the first frame and never restarts mid-shower.
             self._draw_weather(phase_ms)
@@ -300,21 +355,26 @@ class Ambient:
         been - see config.AMBIENT_WEATHER_IN_DARK to put it back.
         """
         d = self.display
+        # A banner is content a parent explicitly asked the panel to show, so
+        # (unlike the weather, which is fenced by AMBIENT_WEATHER_IN_DARK) it
+        # shows in the dark room too. Both are real readouts, not a standby
+        # lamp: draw them at the weather level so they are legible, and fall
+        # back to AMBIENT only when there is nothing on the frame but the lamp.
+        banner = self._banner_text()
         showing_weather = (
             getattr(self.config, "AMBIENT_WEATHER_IN_DARK", True)
             and self.weather is not None
             and self.weather.ok
         )
-        # The weather is a real readout, not a standby lamp: draw it at the
-        # weather level so it is legible, and fall back to AMBIENT only when
-        # there is nothing on the frame but the lamp.
-        if showing_weather:
+        if banner is not None or showing_weather:
             d.set_brightness(self._weather_brightness())
         else:
             d.set_brightness(self.config.BRIGHTNESS_AMBIENT)
         d.clear()
         d.power_pixel()
-        if showing_weather:
+        if banner is not None:
+            self._draw_banner()
+        elif showing_weather:
             # phase_ms is not available here (this frame is not the state's
             # phase), so use the raw ms clock: the rain still falls.
             self._draw_weather(time.ticks_ms())

@@ -286,6 +286,38 @@ For a render that needs no board at all, `tests/`-style host scripts can
 compose the same frames through a fake display (that is how the palettes above
 were chosen).
 
+## Remote control and the idle banner
+
+The board polls a LAN service (`config.REMOTE_SERVICE_URL`, plain HTTP) and
+turns its answer into the same button events the panel already handles — A, B,
+C and D. The wire contract is pinned in the sibling
+`nickbrett1/galactic-unicorn-remote` repo
+(`specs/spec/api/device-protocols.md`); the board implements it in
+`lib/remote.py` (the poller) and `lib/reconcile.py` (the pure decision).
+
+**The idle banner.** A parent can ask the panel to scroll a short message
+across its idle screen. It is *content, not an event*: it rides the poll the
+board already makes (like the weather), carries a monotonic `id`, and moves no
+`gen`. Rules, from the contract (§3.0):
+
+- **Idle-only.** The server refuses to set one unless the panel reports
+  `ambient`; the board draws it only in AMBIENT (`reconcile.banner_for`), and
+  drops it the moment a poll reports it has left AMBIENT — so it can never
+  reappear stale after a countdown.
+- **Server-side expiry, no board clock.** The board never compares a time; the
+  server stops sending the banner and the next poll clears it.
+- **Confirmed by the board.** The board reports the id it is scrolling as
+  `message_id`; the page shows "showing on the panel" only when that matches the
+  id it sent — the same sent-vs-done rule the four buttons obey.
+
+The scroll itself is `lib/ambient.py:_draw_banner`: one line, right to left,
+placed from the board's own `ticks_ms` (so it is smooth across frames and
+restarts on a new id), looping with a gap until the server stops sending it. It
+takes the whole frame while it is up — the idle screen has one slot for
+content — and, being something a parent explicitly asked for, it shows in a
+dark room too. `main.py` hands the same `Remote` object to the renderer as its
+`banner` source, so the poll owns the state and the renderer only reads it.
+
 ## Linting firmware
 
 Firmware is linted with `ruff check .`, which covers the

@@ -687,3 +687,80 @@ night puts the moon behind the cloud, a rainy night keeps its glyph, the
 - **The night sky is one static frame**, like every glyph but `rain`. A slow
   twinkle is possible (the rain already proves multi-frame animation works at
   the idle cadence) but the panel is furniture and mostly still is the rule.
+
+## T5 — bug: "send 'Hello' to the panel, the page says scrolling, the panel does nothing" (2026-09-29)
+
+Report, verbatim: *"a bug. i send a message like 'Hello' to the panel. the
+website says: scrolling: 'Hello' - but nothing changes on the panel"*.
+
+### The read
+
+Not a bug in either half — a feature that exists on one side of the wire and
+not the other. The remote website (`nickbrett1/galactic-unicorn-remote`) has an
+"idle banner" composer: it POSTs `{text}` to `/api/message`, the server holds a
+banner slot, and every `GET /device/poll` response carries it as
+`"message": {"id": 4, "text": "Hello"}`. The contract is pinned in that repo's
+`specs/spec/api/device-protocols.md` §1 and §3.0.
+
+The firmware implemented **none** of it. `lib/remote.py` parsed the response
+and read only `gen`/`action`/`routine`/`next_poll_ms`; `lib/reconcile.py` had no
+`message` concept; nothing drew a banner; the poll never reported `message_id`.
+So the board ignored the field, and the page's `scrolling: "Hello"` — which the
+page derives from the *server's own slot*, not from a board acknowledgement
+(§3.0 makes the real ack a separate "showing on the panel") — was true of the
+server and false of the panel. Hence the report.
+
+The spec is explicit that the firmware is a **separate repo and out of scope**
+of the website's, and that *"the board must pick it up on its next
+`GET /device/poll` and echo the id back as `message_id`"*. That board half is
+this task.
+
+### The change (all firmware)
+
+- lib/reconcile.py: `banner_for(message, state)` — the pure, host-tested rule
+  for what to scroll: the `(id, text)` pair in AMBIENT only, `None` otherwise
+  (absent slot, non-idle state, or half a payload — text with no id cannot be
+  acknowledged, so it is no banner). `build_report` gains `message_id`, cleared
+  with the usual `is None` rule so a reused dict never claims a stale banner.
+- lib/remote.py: `_update_banner` (adopt/drop from each poll — a NEW id
+  restarts the scroll, the same id re-sent does not, leaving AMBIENT drops it);
+  banner state `message_id`/`message_text`/`message_at`; `message_id` reported
+  **only while the wire state is AMBIENT**, so the board's ack and the server's
+  "drop it when the board leaves AMBIENT" rule agree from both ends;
+  `poll_path` carries `message_id` when present.
+- lib/ambient.py: an optional `banner` source (duck-typed, getattr-read every
+  frame, like `weather`); `_draw_banner` scrolls one line right-to-left from the
+  board's own `ticks_ms`, looping with a gap, taking the whole frame in both
+  `draw` (lit room) and `draw_dark` (a message is content a parent asked for).
+- main.py: hands the `Remote` to the renderer as its `banner` source, at boot
+  and on the late-attach retry path — the same hand-off the weather already gets.
+
+### Tests
+
+- tests/test_reconcile.py: 7 cases — `banner_for` returns the pair in AMBIENT,
+  is idle-only, needs both halves, tolerates a missing slot; `message_id` is
+  carried, a zero id is kept, and reuse clears it.
+- tests/test_remote.py: 7 cases — `poll_path` carries/omits `message_id`, and
+  `_update_banner` adopts, keeps on a repeat id, restarts on a new id, drops
+  when the slot is gone, and drops when the board leaves AMBIENT.
+- tests/test_ambient.py: 5 cases — a banner takes the idle screen, scrolls left
+  over time, yields to the weather when absent, shows in a dark room, and a
+  source without the attribute is harmless.
+
+Host results: pytest 98 passed (was 85); ruff clean; test_ambient 27/27 (was 22).
+
+### Not done / still open
+
+- **Not seen on the panel / against the real service yet.** The pieces are
+  pinned on the host; the end-to-end path (page → `/api/message` → poll →
+  scroll → `message_id` → "showing on the panel") needs the board on the LAN
+  with the service up. That is the eye test, as ever.
+- **Stale banner if the link is down for a whole countdown.** The board clears
+  the banner on the first poll that reports it has left AMBIENT, which is the
+  contract's mechanism; if the radio is down for the entire countdown, the last
+  text could survive to the next idle screen. Low-probability and self-healing
+  on the next successful poll; a per-frame guard would need the renderer to
+  know the engine state, which it deliberately does not.
+- **No local TTL, by design.** §3.0 puts expiry on the server and says the
+  board compares no clock; we follow it. A board that lost the link mid-scroll
+  keeps scrolling the last text until the link returns.

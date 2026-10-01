@@ -304,19 +304,32 @@ board already makes (like the weather), carries a monotonic `id`, and moves no
   `ambient`; the board draws it only in AMBIENT (`reconcile.banner_for`), and
   drops it the moment a poll reports it has left AMBIENT — so it can never
   reappear stale after a countdown.
-- **Server-side expiry, no board clock.** The board never compares a time; the
-  server stops sending the banner and the next poll clears it.
+- **Server-side expiry, no board clock.** The board never compares a wall
+  clock to a TTL; the server stops sending the banner and the next poll clears
+  it.
+- **Shown once, then the idle screen returns.** A banner scrolls through a
+  single pass and is then retired (see below), so it never loops on the panel
+  while the server still holds the slot.
 - **Confirmed by the board.** The board reports the id it is scrolling as
   `message_id`; the page shows "showing on the panel" only when that matches the
   id it sent — the same sent-vs-done rule the four buttons obey.
 
 The scroll itself is `lib/ambient.py:_draw_banner`: one line, right to left,
 placed from the board's own `ticks_ms` (so it is smooth across frames and
-restarts on a new id), looping with a gap until the server stops sending it. It
-takes the whole frame while it is up — the idle screen has one slot for
-content — and, being something a parent explicitly asked for, it shows in a
-dark room too. `main.py` hands the same `Remote` object to the renderer as its
-`banner` source, so the poll owns the state and the renderer only reads it.
+restarts on a new id). It is drawn in the block font (`lib/bigfont.py`,
+`draw_text_inset`) one pixel in from the top and bottom — a message should read
+across a room, and the border keeps the panel's edge pixels (the power lamp at
+`(0, 0)` especially) clear as the text scrolls past them. It is **one-shot**:
+once the text has crossed the panel
+(`Ambient._expire_banner`), the renderer calls `Remote.message_done`, which
+clears the live text and remembers the id, so the panel returns to its idle
+screen and the next poll — the service keeps relaying the same slot until its
+own TTL — does not restart the scroll. It takes the whole frame while it is up
+— the idle screen has one slot for content — and, being something a parent
+explicitly asked for, it shows in a dark room too. `main.py` hands the same
+`Remote` object to the renderer as its `banner` source, so the poll owns the
+state and the renderer only reads it (and calls the one `message_done` hook
+when a pass completes).
 
 ## Linting firmware
 

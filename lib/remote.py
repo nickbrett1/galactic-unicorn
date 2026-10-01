@@ -457,6 +457,13 @@ class Remote:
         # reconcile loop above.
         self.message_id = None
         self.message_text = None
+        # The id of the message the panel has FINISHED showing (one-shot). A
+        # banner scrolls through once and is retired (`message_done`, called by
+        # the renderer), so its id is remembered here: the service keeps
+        # relaying the slot on every poll until its own TTL, and without this
+        # the next poll would restart the scroll - the loop this exists to
+        # stop. A NEW id adopts as usual.
+        self.message_shown = None
         # The ticks_ms the CURRENT banner started (a new id restarts the
         # scroll). Read by the renderer to place the text, so it is a board
         # clock, never a wall clock - the banner has no TTL on the board; the
@@ -815,6 +822,20 @@ class Remote:
             message_id=message_id,
         )
 
+    def message_done(self):
+        """Retire the banner once it has scrolled through - one pass, once.
+
+        The renderer calls this the moment a banner finishes its single pass
+        (lib/ambient.py, which owns the per-frame clock), so the panel returns
+        to its idle screen instead of looping the text until the server's TTL.
+        The id is remembered in `message_shown`; the service keeps relaying the
+        same slot on every poll, and _update_banner skips an id already shown,
+        so the scroll cannot restart. A NEW id is still adopted as usual.
+        """
+        self.message_shown = self.message_id
+        self.message_id = None
+        self.message_text = None
+
     def _update_banner(self, desired, state):
         """Adopt or drop the idle banner from this poll (section 3.0).
 
@@ -824,9 +845,13 @@ class Remote:
         compared here - the server owns the TTL and stops sending it. A NEW id
         restarts the scroll from the right edge; the same id re-sent leaves the
         scroll where it is, so a 2 s poll does not make the text stutter.
+
+        An id already shown is NOT re-adopted (see message_done): a banner is
+        one-shot, and the service keeps the slot around well after the board
+        has finished with it.
         """
         banner = reconcile.banner_for(desired.get("message"), state)
-        if banner is None:
+        if banner is None or banner[0] == self.message_shown:
             self.message_id = None
             self.message_text = None
         elif banner[0] != self.message_id:

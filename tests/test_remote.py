@@ -408,12 +408,13 @@ def test_poll_path_omits_the_message_id_when_no_banner():
 
 
 class _BannerSelf:
-    """The attributes _update_banner touches, so the glue is testable alone."""
+    """The attributes the banner glue touches, so it is testable alone."""
 
     def __init__(self):
         self.message_id = None
         self.message_text = None
         self.message_at = 0
+        self.message_shown = None
 
 
 def test_update_banner_adopts_then_keeps_the_id():
@@ -450,3 +451,27 @@ def test_update_banner_drops_when_the_panel_leaves_ambient():
     remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "countdown")
     assert s.message_id is None
     assert s.message_text is None
+
+
+def test_message_done_retires_and_does_not_resume_on_a_repeat_poll():
+    # One-shot: once the panel has shown the id, a poll still relaying that same
+    # slot (the service holds it until its TTL) must not restart the scroll.
+    s = _BannerSelf()
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    remote.Remote.message_done(s)
+    assert s.message_id is None
+    assert s.message_text is None
+    assert s.message_shown == 4
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    assert s.message_id is None
+    assert s.message_text is None
+
+
+def test_message_done_still_adopts_a_new_id():
+    # A fresh message after a shown one is a new thing to show.
+    s = _BannerSelf()
+    remote.Remote._update_banner(s, {"message": {"id": 4, "text": "Hi"}}, "ambient")
+    remote.Remote.message_done(s)
+    remote.Remote._update_banner(s, {"message": {"id": 5, "text": "Bye"}}, "ambient")
+    assert s.message_id == 5
+    assert s.message_text == "Bye"

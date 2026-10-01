@@ -730,8 +730,10 @@ this task.
   `poll_path` carries `message_id` when present.
 - lib/ambient.py: an optional `banner` source (duck-typed, getattr-read every
   frame, like `weather`); `_draw_banner` scrolls one line right-to-left from the
-  board's own `ticks_ms`, looping with a gap, taking the whole frame in both
-  `draw` (lit room) and `draw_dark` (a message is content a parent asked for).
+  board's own `ticks_ms`, taking the whole frame in both `draw` (lit room) and
+  `draw_dark` (a message is content a parent asked for). Originally it looped
+  with a gap until the server stopped sending it; it is now one-shot (see the
+  follow-up below).
 - main.py: hands the `Remote` to the renderer as its `banner` source, at boot
   and on the late-attach retry path — the same hand-off the weather already gets.
 
@@ -748,6 +750,82 @@ this task.
   source without the attribute is harmless.
 
 Host results: pytest 98 passed (was 85); ruff clean; test_ambient 27/27 (was 22).
+
+### Follow-up: the banner is one-shot (2026-10-01)
+
+**Reported:** "when I send a message to the panel it goes into a loop and keeps
+scrolling the message. I only want it to show once and then return to the idle
+screen." The original firmware looped the scroll (with a gap) for the whole of
+the server's 120 s slot — correct against the letter of the contract, wrong for
+what the panel is for. One message, shown once.
+
+The clock is per-frame and belongs to the renderer, so the completion is
+detected and acted on there, and the poll is told:
+
+- lib/ambient.py: `_banner_elapsed` / `_banner_travelled` split the placement
+  out; `_expire_banner` retires a banner once `travelled >= span` (its own width
+  plus the panel — in from the right, out to the left). It runs at the top of
+  both `draw` and `draw_dark`, so the retiring frame is already the idle screen
+  (the text is off-panel by then, so nothing visible is skipped). It calls
+  `message_done` on the source when that hook exists, so an older remote or a
+  test fake keeps the old behaviour instead of raising.
+- lib/remote.py: `message_done()` clears `message_id`/`message_text` (the ack
+  stops, so the page's "showing on the panel" is true only while it really is)
+  and records the id in `message_shown`. `_update_banner` skips an id already in
+  `message_shown`, because the service keeps relaying the slot on every poll
+  until its TTL — without that, the next poll would restart the scroll, which is
+  the loop being fixed. A NEW id still adopts as usual.
+- Removed `BANNER_GAP`: a one-shot scroll never runs into its own start.
+
+Tests: test_remote +2 (`message_done` retires and a re-sent id does not resume;
+a new id still adopts), test_ambient +1 (`case_banner_shows_once_then_returns_to_idle`).
+Host: pytest 100 passed (was 98); ruff `check .` clean; test_ambient 28/28 (was 27).
+
+**Same day, bigger text.** Follow-up: "make the text a little bigger on the
+banner. We can leave a single pixel border at the top and bottom but no reason
+to not use the space." The banner was the thin 8 px built-in font; everything
+else big on this panel is the 11 px block font (`lib/bigfont.py`). So:
+
+- lib/bigfont.py: `_draw` factors the row rendering out of `draw_text`;
+  `draw_text_inset` is the same glyphs and advance on a 9 px body
+  (`INSET_ROW_Y`/`INSET_ROW_H = (2,2,1,2,2)`), starting one row down. It exists
+  because the banner SCROLLS: it passes through x=0, where the power lamp sits,
+  and a full-height glyph would draw over the lamp as it goes. The 1 px border
+  is what keeps the lamp lit - the thin font only escaped this by being 8 px
+  tall and centred. The middle row gives up its third pixel so the outline rows
+  stay a solid 2 px and the block reads as full height.
+- lib/ambient.py: `_draw_banner` uses `bigfont.draw_text_inset`, and
+  `_banner_travelled` measures with `bigfont.text_width`, so a one-pass scroll
+  is the wide font's width, not the thin one's.
+
+Tests: test_ambient +1 (`case_banner_keeps_off_the_top_and_bottom_rows` - no
+ink on rows 0 or 10 across a scroll, i.e. the lamp is safe); the banner
+assertions moved from the thin font's `texts` to banner-coloured ink, since
+bigfont draws rectangles. Host: pytest 100 passed; ruff `check .` clean;
+test_ambient 29/29 (was 28).
+
+**Punctuation.** bigfont had letters, digits, `-`, `!` and space only, so any
+other mark in a message was skipped (it still advanced, so a `?` or `.` showed
+as a blank gap). Added `. , ' " : ; ? ( ) / & + = * # % _`, mostly narrow (one
+or two logical pixels, the width taken from the row as ever) so a stop or a
+comma does not open a canyon between words. Lowercase still upcases; a truly
+unknown character still advances blank rather than failing.
+
+**The rarer marks too.** Follow-up "add them" - the symbols left out above:
+`@ $ ^ ~ { } [ ] < >` plus the section sign and the ellipsis. The two
+non-ASCII keys (`\u00a7`, `\u2026`) are written as escapes so the firmware
+source stays ASCII; `\u2026` is five columns of three dots. After this the
+alphabet is complete enough that almost any message a parent types draws as
+something.
+
+Tests: new `tests/test_bigfont.py` (self-driven, picked up by the pipeline's
+`tests/test_*.py` loop) - every glyph is five uniform-width rows of `0`/`1`,
+`draw_text`'s advance equals `text_width`, the inset layout inks rows 1..9 (the
+lamp's row 0 stays clear), the full layout inks rows 0..10, and every
+punctuation mark draws some ink. 6/6.
+
+Host: pytest 100 passed; ruff `check .` clean; test_ambient 29/29;
+test_bigfont 6/6.
 
 ### Not done / still open
 
@@ -773,6 +851,9 @@ Host results: pytest 98 passed (was 85); ruff clean; test_ambient 27/27 (was 22)
   text could survive to the next idle screen. Low-probability and self-healing
   on the next successful poll; a per-frame guard would need the renderer to
   know the engine state, which it deliberately does not.
-- **No local TTL, by design.** §3.0 puts expiry on the server and says the
-  board compares no clock; we follow it. A board that lost the link mid-scroll
-  keeps scrolling the last text until the link returns.
+- **No wall-clock TTL, by design.** §3.0 puts expiry on the server and says the
+  board compares no clock to it; we follow it. The one-shot pass above is a
+  board-clock rule (how long one scroll takes), not a TTL, so it is consistent
+  with that. A board that lost the link mid-scroll still finishes its single
+  pass and returns to idle; only the ack (and the server's own slot) wait for
+  the link to come back.

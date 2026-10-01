@@ -617,6 +617,13 @@ class FakeBanner:
         self.message_text = text
         self.message_at = at
         self.message_id = mid if text else None
+        self.done = None
+
+    def message_done(self):
+        # What Remote.message_done does: retire the id and stop drawing it.
+        self.done = self.message_id
+        self.message_id = None
+        self.message_text = None
 
 
 def fresh_with_banner(text="Hello", at=0, **kw):
@@ -624,6 +631,16 @@ def fresh_with_banner(text="Hello", at=0, **kw):
     d, a = fresh_with_weather(**kw)
     a.banner = FakeBanner(text, at)
     return d, a
+
+
+def banner_ink(graphics):
+    """The pixels the banner drew: everything but the (0, 0) power lamp.
+
+    The banner is drawn in bigfont, so its glyphs are rectangles in a single
+    pen (BANNER_RGB) - unlike the weather, whose icon is several pens. That
+    colour is what the banner's own ink is told apart by.
+    """
+    return [p for p in graphics.pixels if p[:2] != (0, 0)]
 
 
 def case_banner_replaces_the_idle_screen():
@@ -634,12 +651,14 @@ def case_banner_replaces_the_idle_screen():
         d, a = fresh_with_banner("Hello", at=0)
         a.draw(0)
         g = d.graphics
-        # The banner uses text(); the weather glyph uses rectangles. So with a
-        # banner the frame is one text call and nothing but the lamp pixel.
+        ink = banner_ink(g)
+        # The banner is one colour (BANNER_RGB); the weather icon is not. So a
+        # frame whose only ink is banner-coloured IS the banner, with no
+        # weather drawn under it.
         return report(
             "an idle banner takes over the idle screen",
-            bool(g.texts) and len(g.pixels) == 1,
-            f"texts={g.texts} pixels={len(g.pixels)}",
+            not g.texts and ink and all(p[2] == ambient.BANNER_RGB for p in ink),
+            f"texts={g.texts} ink={len(ink)}",
         )
 
     return body()
@@ -652,17 +671,66 @@ def case_banner_scrolls_left_over_time():
         d, a = fresh_with_banner("Hello", at=0)
         _TICKS[0] = 0
         a.draw(0)
-        first = d.graphics.texts[-1][1]
+        first = min(p[0] for p in banner_ink(d.graphics))
         _TICKS[0] = 1000
         a.draw(1000)
-        second = d.graphics.texts[-1][1]
+        second = min(p[0] for p in banner_ink(d.graphics))
         _TICKS[0] = 2000
         a.draw(2000)
-        third = d.graphics.texts[-1][1]
+        third = min(p[0] for p in banner_ink(d.graphics))
         return report(
             "the banner scrolls right to left across the panel",
             first > second > third,
             f"x={first},{second},{third}",
+        )
+
+    return body()
+
+
+def case_banner_keeps_off_the_top_and_bottom_rows():
+    """The banner is drawn inset, so its ink never touches rows 0 or HEIGHT-1.
+
+    That margin is what keeps the power lamp at (0, 0) lit as the text scrolls
+    across it - the reason the banner uses bigfont's inset layout.
+    """
+
+    def body():
+        d, a = fresh_with_banner("Hello", at=0)
+        edge = []
+        for ms in (0, 500, 1000, 1500, 2000, 2500, 3000):
+            _TICKS[0] = ms
+            a.draw(ms)
+            edge += [p for p in banner_ink(d.graphics) if p[1] in (0, HEIGHT - 1)]
+        return report(
+            "the banner leaves a one-pixel border top and bottom",
+            not edge,
+            f"edge_pixels={edge[:4]}",
+        )
+
+    return body()
+
+
+def case_banner_shows_once_then_returns_to_idle():
+    """One pass, once: after the text has crossed, the idle screen comes back."""
+
+    def body():
+        d, a = fresh_with_banner("Hello", at=0)
+        # "Hello" is 34 px wide in bigfont; one pass is 34 + 53 = 87 px, which
+        # at 24 px/s takes ~3.6 s. First frame still shows it...
+        _TICKS[0] = 0
+        a.draw(0)
+        showing = any(p[2] == ambient.BANNER_RGB for p in banner_ink(d.graphics))
+        # ...and past the end of the pass it is retired: the ack is dropped and
+        # the frame is the weather (no banner-coloured ink) rather than the
+        # text looping.
+        _TICKS[0] = 4000
+        a.draw(4000)
+        g = d.graphics
+        still_up = any(p[2] == ambient.BANNER_RGB for p in banner_ink(g))
+        return report(
+            "the banner shows once and then the idle screen returns",
+            showing and a.banner.done == 1 and not still_up,
+            f"showing={showing} done={a.banner.done} still_up={still_up}",
         )
 
     return body()
@@ -693,10 +761,14 @@ def case_banner_shows_in_a_dark_room():
         d, a = fresh_with_banner("Hello", at=0)
         a.draw_dark()
         g = d.graphics
+        lamp = [p for p in g.pixels if p[:2] == (0, 0)]
+        ink = banner_ink(g)
         return report(
             "a dark room keeps the lamp AND the banner",
-            bool(g.texts) and g.pixels == [(0, 0, WHITE)],
-            f"texts={g.texts} pixels={g.pixels}",
+            lamp == [(0, 0, WHITE)]
+            and ink
+            and all(p[2] == ambient.BANNER_RGB for p in ink),
+            f"lamp={lamp} ink={len(ink)}",
         )
 
     return body()
@@ -807,6 +879,8 @@ def main():
         case_the_night_sky_draws_at_the_night_level(),
         case_banner_replaces_the_idle_screen(),
         case_banner_scrolls_left_over_time(),
+        case_banner_keeps_off_the_top_and_bottom_rows(),
+        case_banner_shows_once_then_returns_to_idle(),
         case_no_banner_keeps_the_weather(),
         case_banner_shows_in_a_dark_room(),
         case_banner_ignores_a_source_without_the_attribute(),

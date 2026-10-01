@@ -137,14 +137,16 @@ WEATHER_GAP = 2  # px between the weather icon and the temperature
 # The ink is a pale, slightly warm white: a message is a deliberate, looked-at
 # thing (unlike the weather, which is furniture), so it should read at a
 # glance. It still draws at the weather brightness, so it is no brighter than
-# the idle screen already gets.
+# the idle screen already gets. The font is bigfont's inset layout (9 px, a
+# one-pixel border top and bottom) - big and blocky so it reads across a room,
+# and inset so its ink never crosses the power lamp at (0, 0) as it scrolls.
 BANNER_RGB = (198, 210, 226)
-# Scroll speed, px/s. ~4 characters a second: legible across a room, and a
-# short word crosses the 53 px panel in a couple of seconds.
+# Scroll speed, px/s. Three to four characters a second in bigfont: legible
+# across a room, and a short word crosses the 53 px panel in a couple of
+# seconds. One pass - the text in from the right and out to the left - is the
+# whole of a banner; it is shown once and then the idle screen returns
+# (_expire_banner).
 BANNER_PX_PER_S = 24
-# The gap, in px, between the tail of one pass and the head of the next, so the
-# text does not run straight into its own start.
-BANNER_GAP = 12
 
 
 def _format_temp(temp_c):
@@ -245,26 +247,72 @@ class Ambient:
         """The message to scroll right now, or None. No allocation per frame."""
         return getattr(self.banner, "message_text", None)
 
+    def _banner_elapsed(self):
+        """Ms since the current banner arrived, clamped at 0.
+
+        A banner that arrived "in the future" (a clock that wrapped) counts as
+        just arrived, so it starts at the right edge rather than mid-panel.
+        """
+        elapsed = time.ticks_diff(time.ticks_ms(), getattr(self.banner, "message_at", 0))
+        return max(elapsed, 0)
+
+    def _banner_travelled(self, text):
+        """How far the banner has scrolled, in px, and its one-pass length.
+
+        Returns `(travelled, span)`: `span` is the distance for the text to
+        enter from the right edge and leave the left (its own width plus the
+        panel), and `travelled` is how much of it the scroll has covered. The
+        width is bigfont's, because that is the font the banner is drawn in.
+        """
+        span = bigfont.text_width(text) + self.display.width
+        travelled = (self._banner_elapsed() * BANNER_PX_PER_S) // 1000
+        return travelled, span
+
+    def _expire_banner(self):
+        """Retire a banner that has finished its single pass - one-shot.
+
+        A message is shown ONCE, not looped: the moment the text has fully
+        entered from the right and fully left the left edge, the frame goes back
+        to the idle screen. The source is asked to retire the id (Remote's
+        `message_done`), so the poll stops acknowledging it AND the next poll
+        does not restart the scroll - the service keeps relaying the slot until
+        its own TTL. A source without the hook (an older remote, or a test fake)
+        simply keeps the old behaviour and is left alone.
+
+        Called before the frame decides what to draw, so the retiring frame is
+        the idle screen rather than a blank one (the text is already off-panel
+        at this point, so nothing visible is skipped).
+        """
+        text = self._banner_text()
+        if text is None:
+            return
+        travelled, span = self._banner_travelled(text)
+        if travelled < span:
+            return
+        done = getattr(self.banner, "message_done", None)
+        if done is not None:
+            done()
+
     def _draw_banner(self):
         """Scroll the idle banner across the panel, one line, right to left.
 
         The frame's own `ticks_ms` clock places the text (the remote records the
         ticks the message arrived), so the scroll is smooth and continuous
-        across frames and restarts cleanly when a new id arrives. The offset is
-        taken modulo (text + panel + gap), so the message loops with a gap until
-        the server stops sending it. Drawing off-panel is clipped by the
-        graphics layer, so no special-casing is needed at the edges.
+        across frames and restarts cleanly when a new id arrives. The scroll
+        stops after a single pass (see _expire_banner); drawing off-panel is
+        clipped by the graphics layer, so no special-casing is needed at the
+        edges.
+
+        Drawn in bigfont, one pixel in from the top and bottom: this is a
+        message to be read across a room (the thin built-in font was too
+        weedy), and the border keeps the panel's edge pixels - the power lamp
+        at (0, 0) in particular - clear as the text scrolls past them.
         """
         d = self.display
         text = self._banner_text()
-        elapsed = time.ticks_diff(time.ticks_ms(), getattr(self.banner, "message_at", 0))
-        # A banner that arrived "in the future" (a clock that wrapped) starts at
-        # the right edge rather than mid-panel.
-        elapsed = max(elapsed, 0)
-        span = d.text_width(text, scale=1) + d.width + BANNER_GAP
-        x = d.width - ((elapsed * BANNER_PX_PER_S) // 1000) % span
-        y = (d.height - 8) // 2
-        d.text(text, x, y, rgb=BANNER_RGB, scale=1)
+        travelled, _span = self._banner_travelled(text)
+        x = d.width - travelled
+        bigfont.draw_text_inset(d, x, 0, text, rgb=BANNER_RGB)
 
     def _weather_brightness(self):
         """The brightness for a frame with a weather reading on it.
@@ -294,6 +342,9 @@ class Ambient:
 
     def draw(self, phase_ms):
         d = self.display
+        # A banner that has finished its one pass retires HERE, so this frame
+        # is already the idle screen (see _expire_banner).
+        self._expire_banner()
         # routine.tick() has already set AMBIENT; raise it for the banner and
         # the weather only (the clock fallback below keeps the dimmer level).
         showing = self._banner_text() is not None or (
@@ -355,6 +406,9 @@ class Ambient:
         been - see config.AMBIENT_WEATHER_IN_DARK to put it back.
         """
         d = self.display
+        # A banner that has finished its one pass retires HERE too, so a dark
+        # room returns to its lamp-and-weather idle screen just the same.
+        self._expire_banner()
         # A banner is content a parent explicitly asked the panel to show, so
         # (unlike the weather, which is fenced by AMBIENT_WEATHER_IN_DARK) it
         # shows in the dark room too. Both are real readouts, not a standby

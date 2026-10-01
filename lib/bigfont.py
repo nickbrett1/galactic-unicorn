@@ -23,6 +23,17 @@ DEFAULT_COLS = 3  # glyphs are this many logical pixels wide unless they say oth
 GAP = 1  # px between glyphs
 HEIGHT = 11
 
+# The same five-row glyphs, drawn one pixel in from the top and bottom (rows
+# 1..9 of the 11 px panel). The idle banner uses this: it scrolls across the
+# whole width, so it passes through x=0, and the power lamp lives at (0, 0) -
+# the border is what keeps the lamp lit (a full-height glyph would overdraw it
+# as the text scrolls past). The outline rows keep their 2 px and the middle row
+# gives up its third pixel, so the block stays solid where the eye reads it and
+# the panel is never more than one pixel of margin off full height.
+INSET_ROW_Y = (1, 3, 5, 6, 8)  # top edge of each row, one row down
+INSET_ROW_H = (2, 2, 1, 2, 2)  # its height; the sum is HEIGHT - 2 (9)
+INSET_TOP = 1  # px of border above the ink; the same is left below
+
 # -- the alphabet -----------------------------------------------------------
 # Each glyph is five rows of logical pixels; '1' is ink. Rows may be 3 or 4
 # wide - the width is taken from the row itself. Deliberately sparse (blocky):
@@ -72,6 +83,44 @@ GLYPHS = {
     "9": ("111", "101", "111", "001", "111"),
     "-": ("000", "000", "111", "000", "000"),
     "!": ("010", "010", "010", "000", "010"),
+    # Punctuation, so a message a parent types arrives as typed rather than
+    # losing every stop and mark. Most are narrow - one or two logical pixels -
+    # so a full stop or a comma does not open a canyon between the words; the
+    # marks that need the height and the diagonal (?, /, the brackets) keep
+    # three columns. The advance comes from the row width (glyph_cols), so a
+    # narrow glyph advances less and the word stays tight.
+    ".": ("0", "0", "0", "0", "1"),
+    ",": ("0", "0", "0", "1", "1"),
+    "'": ("1", "1", "0", "0", "0"),
+    '"': ("101", "101", "000", "000", "000"),
+    ":": ("0", "1", "0", "1", "0"),
+    ";": ("0", "1", "0", "1", "1"),
+    "?": ("111", "001", "011", "000", "010"),
+    "(": ("01", "10", "10", "10", "01"),
+    ")": ("10", "01", "01", "01", "10"),
+    "/": ("001", "001", "010", "100", "100"),
+    "&": ("011", "100", "010", "101", "011"),
+    "+": ("000", "010", "111", "010", "000"),
+    "=": ("000", "111", "000", "111", "000"),
+    "*": ("101", "010", "101", "000", "000"),
+    "#": ("101", "111", "101", "111", "101"),
+    "%": ("101", "001", "010", "100", "101"),
+    "_": ("000", "000", "000", "000", "111"),
+    # The rarer marks: symbols and the brackets. Kept for completeness so that
+    # whatever a parent types shows as something; the two non-ASCII keys are
+    # written as escapes so this file stays ASCII for the board.
+    "@": ("111", "101", "111", "100", "111"),
+    "$": ("111", "110", "111", "011", "111"),
+    "^": ("010", "101", "000", "000", "000"),
+    "~": ("000", "011", "110", "000", "000"),
+    "{": ("011", "010", "110", "010", "011"),
+    "}": ("110", "010", "011", "010", "110"),
+    "[": ("11", "10", "10", "10", "11"),
+    "]": ("11", "01", "01", "01", "11"),
+    "<": ("001", "010", "100", "010", "001"),
+    ">": ("100", "010", "001", "010", "100"),
+    "\u00a7": ("111", "100", "111", "001", "111"),  # section sign
+    "\u2026": ("00000", "00000", "00000", "00000", "10101"),  # ellipsis
     " ": ("000", "000", "000", "000", "000"),
 }
 
@@ -92,23 +141,39 @@ def text_width(s, gap=GAP):
     return w - gap
 
 
-def draw_text(display, x, y, s, rgb=None):
-    """Draw `s` with its top-left at (x, y). Returns the x past the last glyph.
-
-    Unknown characters are skipped (but still advance), so a stray character
-    never takes the panel down.
-    """
+def _draw(display, x, y, s, row_y, row_h, rgb):
+    """Draw `s` on the given row layout. Returns the x past the last glyph."""
     if rgb is not None:
         display.use(rgb)
     for ch in s:
         rows = GLYPHS.get(ch.upper())
         if rows is not None:
             for r in range(5):
-                ry = y + ROW_Y[r]
-                rh = ROW_H[r]
+                ry = y + row_y[r]
+                rh = row_h[r]
                 row = rows[r]
                 for c in range(len(row)):
                     if row[c] == "1":
                         display.rect(x + c * PIX_W, ry, PIX_W, rh)
         x += glyph_cols(ch) * PIX_W + GAP
     return x - GAP
+
+
+def draw_text(display, x, y, s, rgb=None):
+    """Draw `s` with its top-left at (x, y). Returns the x past the last glyph.
+
+    Fills the panel height. Unknown characters are skipped (but still
+    advance), so a stray character never takes the panel down.
+    """
+    return _draw(display, x, y, s, ROW_Y, ROW_H, rgb)
+
+
+def draw_text_inset(display, x, y, s, rgb=None):
+    """Draw `s` one pixel in from the top and bottom (rows 1..9). Returns x.
+
+    Same glyphs and advance as `draw_text`, laid out one pixel smaller, for a
+    caller that must keep the panel's edge pixels clear - the scrolling idle
+    banner, because its own ink passes over the power lamp at (0, 0). `y` is the
+    top of the block; the ink begins at y + INSET_TOP.
+    """
+    return _draw(display, x, y, s, INSET_ROW_Y, INSET_ROW_H, rgb)

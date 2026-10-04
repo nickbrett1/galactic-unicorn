@@ -418,6 +418,64 @@ def case_update_sweeps_leftover_staging():
     )
 
 
+def case_update_reclaims_rollback_when_staging_runs_out_of_space():
+    # Measured on the board 2026-10-04: live tree 323 KB, pack 255 KB, and a
+    # resident :prev left only ~44 KB free, so every stage failed OSError(28)
+    # and the board sat on 0.1.48 for three days while the service served
+    # 0.1.49. _update must reclaim the rollback slot (which _apply rebuilds)
+    # and retry once, rather than dead-ending. The first stage raises as the
+    # full filesystem did; the retry must find the slot gone and succeed.
+    files = {"main.py": b"print('new main')\n"}
+    blob, entries = _pack(files)
+    manifest = {
+        "name": "galactic-unicorn",
+        "version": "9.9.9",
+        "pack": {"file": "firmware.pack", "sha256": hashlib.sha256(blob).hexdigest()},
+        "files": entries,
+    }
+    ROUTES["/f/space.json"] = (200, json.dumps(manifest).encode())
+    ROUTES["/f/firmware.pack"] = (200, blob)
+
+    _device_files(TMP)
+    calls = {"n": 0}
+    saw_slot = {"on_fail": None}
+    real_stage = updater._stage
+
+    def flaky(url, fs, sha, timeout_s, limit=updater.MAX_PACK_BYTES):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            saw_slot["on_fail"] = os.path.exists(updater.PREV_DIR)
+            raise OSError(28)
+        return real_stage(url, fs, sha, timeout_s, limit)
+
+    updater._stage = flaky
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        with open(updater.VERSION_FILE, "w") as fh:
+            fh.write("9.9.8\n")
+        # No proven boot-ok for this version, or _drop_proven_rollback would
+        # (correctly) drop the slot before we can stage against it.
+        try:
+            os.remove(updater.BOOT_OK_FILE)
+        except OSError:
+            pass
+        # A resident rollback copy is what ate the free space.
+        os.makedirs(updater.PREV_DIR, exist_ok=True)
+        with open(updater.PREV_DIR + "/old.py", "w") as fh:
+            fh.write("OLD = 1\n")
+        applied = updater._update(Config(f"http://127.0.0.1:{PORT}/f/space.json"))
+    finally:
+        updater._stage = real_stage
+        os.chdir(cwd)
+    ok = applied is True and calls["n"] == 2 and saw_slot["on_fail"] is True
+    return _report(
+        "out of space: the rollback slot is reclaimed and the stage retried",
+        ok,
+        f"applied={applied} stages={calls['n']} slot_present_on_fail={saw_slot['on_fail']}",
+    )
+
+
 def case_update_is_a_noop_on_the_same_version():
     ROUTES["/f/same.json"] = (200, b'{"version":"9.9.9"}')
     _device_files(TMP)
@@ -472,6 +530,7 @@ def main():
             case_apply_moves_the_old_tree_into_the_rollback_slot(),
             case_interrupted_apply_is_rolled_back(),
             case_update_sweeps_leftover_staging(),
+            case_update_reclaims_rollback_when_staging_runs_out_of_space(),
             case_update_is_a_noop_on_the_same_version(),
         ]
     finally:

@@ -854,9 +854,35 @@ def _update(config):
     # measurement). Note the pack's sha256 is verified once the body is
     # complete, i.e. after :next/ has been written - safe, because :next is
     # discarded on any failure and the live tree is still untouched.
-    written, size = _stage(
-        base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
-    )
+    try:
+        written, size = _stage(
+            base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
+        )
+    except OSError as exc:
+        # The 768 KB filesystem cannot always hold the live tree AND a full
+        # rollback copy AND the incoming pack at once. A resident :prev costs
+        # about the whole tree, so once free falls under the pack size every
+        # update fails with OSError(28) - the loop that left this board on
+        # 0.1.48 for three days while the service served 0.1.49 (measured
+        # 2026-10-04: live tree 323 KB, pack 255 KB, free 44 KB with the slot
+        # resident). The rollback copy is RECLAIMABLE: _apply rebuilds it from
+        # the current tree as it replaces each file. A board that can never
+        # update is worse than one that gives up a rollback chance, so drop the
+        # slot and retry the stage ONCE. ENOENT (2) is included because a
+        # _mkdirs that fails under no space surfaces as open() -> ENOENT, not
+        # ENOSPC, which the board's log showed it doing.
+        code = getattr(exc, "errno", None)
+        if code is None and exc.args:
+            code = exc.args[0]
+        if code not in (28, 2) or not _has_rollback():
+            raise
+        _log("out of space staging: reclaiming the rollback slot and retrying")
+        _rmtree(PREV_DIR)
+        _clear(PREV_INFO)
+        _cleanup()
+        written, size = _stage(
+            base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
+        )
     # Every file is verified in :next/ - now record the rollback plan for the
     # tree we are about to replace. Nothing is copied: _apply moves each
     # replaced file into :prev as it goes, so :next and :prev are never both

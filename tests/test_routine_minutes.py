@@ -18,7 +18,7 @@ device-protocols.md section 3:
   * cancel drops a pending length, and switching selection drops it;
   * an invalid length falls back to the routine's own, exactly like absent.
 
-The pure rule (1|3|5, default) is pinned in tests/test_reconcile.py; the remote
+The pure rule (1|3|5|10, default) is pinned in tests/test_reconcile.py; the remote
 forwarding seam in tests/test_remote.py.
 """
 
@@ -202,7 +202,7 @@ def test_remote_start_overrides_a_different_routine_length():
 
 
 def test_each_offered_length_is_honoured():
-    for value in (1, 3, 5):
+    for value in (1, 3, 5, 10):
         e = _engine()
         e.post_event("bathtime", value)
         _deliver(e, 1000)
@@ -222,7 +222,7 @@ def test_absent_minutes_uses_the_routine_length():
 
 
 def test_invalid_minutes_falls_back_to_the_routine_length():
-    for value in (2, 4, 0, -1, True, "3", 3.0):
+    for value in (2, 4, 6, 7, 15, 0, -1, True, "3", "10", 3.0, 10.0):
         e = _engine()
         e.post_event("booktime", value)
         _deliver(e, 1000)

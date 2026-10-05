@@ -860,6 +860,10 @@ test_bigfont 6/6.
 
 ## T6 — remote-selectable countdown length (1/3/5, default 5) — 2026-10-04
 
+> **Extended 2026-10-05:** the offered lengths are now **1 | 3 | 5 | 10**
+> (default still 5). The contract text below is the original T6 record; see
+> **T6.1** at the end for the mirrored change.
+
 Request (operator): a remote-started countdown should offer 1, 3 and 5 minute
 options, defaulting to 5. Today the length is fixed per routine in
 `routines.json` (`minutes: 5`) and the remote can only mimic the four events
@@ -918,3 +922,26 @@ OpenAPI and the shared contract doc
 `decide()` is untouched: `minutes` is an extra field it never reads, so gen
 ordering, TTL, boot-id clearing and the event vocabulary are all unchanged by
 construction.
+
+## T6.1 — remote countdown choices extended to 10 minutes — 2026-10-05
+
+Mirrors `galactic-unicorn-remote` commit `6552a57`. The remote's selector now
+offers **1, 3, 5 or 10** minutes (was 1/3/5); the default stays **5**.
+
+The board's half of the mirrored rule is a single value: `MINUTES_CHOICES` in
+`lib/reconcile.py` grows from `(1, 3, 5)` to `(1, 3, 5, 10)`.
+`DEFAULT_MINUTES` is unchanged at `5`. Nothing else moves:
+
+- `valid_minutes` / `requested_minutes` / `effective_minutes` are unchanged
+  logic — they only read `MINUTES_CHOICES`, so `10` is now accepted and
+  applied while `6`, `7`, `15` and non-integers still fall back to the
+  routine's own `routines.json` `minutes`, byte-identical to a physical press.
+- `minutes` remains per-command data on a `start` only, never persisted; the
+  four device events, `gen` ordering, TTL, boot-id clearing and `decide()` are
+  untouched.
+- `lib/routine.py`, `lib/remote.py` and the wire vocabulary need no change.
+
+Tests updated: `tests/test_reconcile.py` and `tests/test_routine_minutes.py`
+enumerate the choices, so each gained `10` in its accepted set plus `10`-accepts
+and `6`/`7`/`15`/non-integer-falls-back cases. `tests/test_remote.py` pins the
+forwarding seam by value and is unchanged.

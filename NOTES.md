@@ -857,3 +857,64 @@ test_bigfont 6/6.
   with that. A board that lost the link mid-scroll still finishes its single
   pass and returns to idle; only the ack (and the server's own slot) wait for
   the link to come back.
+
+## T6 — remote-selectable countdown length (1/3/5, default 5) — 2026-10-04
+
+Request (operator): a remote-started countdown should offer 1, 3 and 5 minute
+options, defaulting to 5. Today the length is fixed per routine in
+`routines.json` (`minutes: 5`) and the remote can only mimic the four events
+(routine ids + `reset`), so nothing off-board can change it. Wire change on
+both ends.
+
+Owner split: **this repo owns firmware** (`lib/reconcile.py`,
+`lib/routine.py`, `lib/remote.py` + host pytest). The sibling
+`galactic-unicorn-remote` repo owns the UI selector, server validation,
+OpenAPI and the shared contract doc
+`specs/spec/api/device-protocols.md` section 3.
+
+### Agreed contract (confirmed with the operator)
+
+- `POST /api/start` (offered by the service) gains an **optional** `minutes`
+  field: **integer**, one of **1 | 3 | 5**, validated server-side, default 5.
+- The desired slot the board polls and receives becomes, e.g.:
+
+      {"gen":19,"action":"start","routine":"bathtime","minutes":3,"expires_at":<server epoch>}
+
+- **Field name `minutes`** (confirmed): it is the unit `routines.json` already
+  uses, so the two ends name the same thing the same way. Not `minutes_s` /
+  `duration_s` — a countdown length is a whole number of minutes here, and a
+  seconds suffix would imply a unit the field is not in.
+- The duration **rides alongside the start** the way `routine` already does.
+  The board keeps its **exactly four events** (`bathtime`, `booktime`,
+  `cleanup`, `reset`): no fifth event, no new device event.
+- `start_countdown` uses the requested minutes instead of `routine["minutes"]`
+  for a remote-started countdown. **A physical button press keeps
+  `routines.json` `minutes` unchanged.**
+- **No board persistence.** The duration is per-command, like the rest of the
+  desired slot. `gen` ordering, TTL and boot-id clearing are unchanged.
+- **Absent/absent-equivalent `minutes` falls back to `routine["minutes"]`**
+  (which is 5 in today's `routines.json`). This makes an old remote and a
+  physical press byte-identical, which is the stated intent ("a missing
+  minutes must mean 5"). The board treats an absent field, a non-integer, or
+  any value outside 1|3|5 as "no request" and falls back the same way — the
+  server validates, and this is the board's defensive half so an out-of-range
+  value cannot change a countdown. `bool` is rejected explicitly: in Python
+  `True == 1`, so a JSON `true` must not become a one-minute countdown.
+- **Fence (mirrors the idle banner):** bounded, inert, no new device event.
+  The board holds at most one pending remote length; it is consumed when the
+  countdown starts, dropped on cancel, dropped when the selection switches to
+  another routine, and never written to flash.
+
+### Firmware change set
+
+| File | Change |
+|---|---|
+| `lib/reconcile.py` | `MINUTES_CHOICES`/`DEFAULT_MINUTES`, `valid_minutes`, `requested_minutes(desired)`, `effective_minutes(requested, routine_minutes)` — all pure. |
+| `lib/routine.py` | `post_event(event, minutes=None)`; one pending `(minutes, routine)` override; `start_countdown` uses `reconcile.effective_minutes`; `cancel`/routine-switch clear the override. |
+| `lib/remote.py` | `_apply` forwards `reconcile.requested_minutes(desired)` to `engine.post_event` and notes the length in the applied log line. |
+| `tests/test_reconcile.py` | pytest for the four pure minutes helpers. |
+| `tests/test_remote.py` | pytest for the `_apply` forward seam (present -> forwarded, absent -> None). |
+
+`decide()` is untouched: `minutes` is an extra field it never reads, so gen
+ordering, TTL, boot-id clearing and the event vocabulary are all unchanged by
+construction.

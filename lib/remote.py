@@ -873,11 +873,18 @@ class Remote:
         if kind == reconcile.DECISION_APPLY:
             # Emit the SAME event the button would; the engine turns it into
             # the button press. This is the whole of the remote's vocabulary.
-            self.engine.post_event(detail)
+            # The optional countdown length rides ALONGSIDE the start (it is
+            # data, not a fifth event); None means "use the routine's own".
+            minutes = reconcile.requested_minutes(desired)
+            self.engine.post_event(detail, minutes)
             if gen is not None and gen > self.applied_gen:
                 self.applied_gen = gen
                 _write_gen(self.gen_file, gen)
-            self.log("remote: applied " + str(detail) + " gen=" + str(gen))
+            if minutes is None:
+                self.log("remote: applied " + str(detail) + " gen=" + str(gen))
+            else:
+                self.log("remote: applied " + str(detail) + " minutes="
+                         + str(minutes) + " gen=" + str(gen))
         elif kind == reconcile.DECISION_IGNORE:
             self.log("remote: ignored desired (" + str(detail) + ")")
 

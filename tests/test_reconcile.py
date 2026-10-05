@@ -409,3 +409,91 @@ def test_build_report_reuse_clears_the_message_id():
     report = reconcile.build_report({}, "b1", "0.2.0", 3, "ambient", message_id=4)
     reconcile.build_report(report, "b1", "0.2.0", 4, "ambient")
     assert "message_id" not in report
+
+
+# -- the remote-chosen countdown length (device-protocols.md section 3) -------
+#
+# The duration rides ALONGSIDE a start the way `routine` does: data, not a
+# fifth event, moving no gen. The board keeps its four events; only the length
+# of the countdown a remote start leads to changes. All pure, so the rule is
+# pinned here rather than on a flashed board.
+
+def test_valid_minutes_accepts_only_the_offered_lengths():
+    for value in (1, 3, 5):
+        assert reconcile.valid_minutes(value) is True
+    for value in (0, 2, 4, 6, -1, -3, 60, None, "3", 3.0, 5.0):
+        assert reconcile.valid_minutes(value) is False
+
+
+def test_valid_minutes_rejects_bools():
+    # True == 1 in Python: without the explicit guard a JSON `true` would
+    # become a one-minute countdown, a value the service would reject.
+    assert reconcile.valid_minutes(True) is False
+    assert reconcile.valid_minutes(False) is False
+
+
+def test_requested_minutes_reads_a_valid_start_request():
+    slot = _slot(19, "start", "bathtime")
+    slot["minutes"] = 3
+    assert reconcile.requested_minutes(slot) == 3
+    for value in (1, 3, 5):
+        slot["minutes"] = value
+        assert reconcile.requested_minutes(slot) == value
+
+
+def test_requested_minutes_is_none_when_the_field_is_absent():
+    # An old remote (no field) means "use the routine's own minutes", exactly
+    # like a physical press - this is the default-when-absent rule.
+    assert reconcile.requested_minutes(_slot(19, "start", "bathtime")) is None
+
+
+def test_requested_minutes_refuses_out_of_range_and_garbage():
+    for value in (0, 2, 4, 6, -1, None, "3", 3.0, True):
+        slot = _slot(19, "start", "bathtime")
+        slot["minutes"] = value
+        assert reconcile.requested_minutes(slot) is None
+
+
+def test_requested_minutes_is_start_only():
+    # cancel/none carry no length, even if the server left the field in.
+    assert reconcile.requested_minutes(_slot(19, "cancel", None)) is None
+    assert reconcile.requested_minutes(
+        {"gen": 19, "action": "none", "minutes": 3}) is None
+    assert reconcile.requested_minutes(None) is None
+
+
+def test_effective_minutes_request_wins_over_the_routine():
+    assert reconcile.effective_minutes(1, 5) == 1
+    assert reconcile.effective_minutes(3, 5) == 3
+    assert reconcile.effective_minutes(5, 5) == 5
+    # Even against a routine configured for something else.
+    assert reconcile.effective_minutes(3, 9) == 3
+
+
+def test_effective_minutes_no_request_uses_the_routine():
+    # No request -> routines.json, i.e. the old behaviour unchanged.
+    assert reconcile.effective_minutes(None, 5) == 5
+    assert reconcile.effective_minutes(None, 7) == 7
+    assert reconcile.effective_minutes(None, "7") == 7
+
+
+def test_effective_minutes_invalid_request_falls_back_to_the_routine():
+    for value in (0, 2, 4, 6, -1, True, "3", 3.0):
+        assert reconcile.effective_minutes(value, 4) == 4
+
+
+def test_effective_minutes_defaults_when_nothing_is_configured():
+    assert reconcile.effective_minutes(None, None) == reconcile.DEFAULT_MINUTES
+    assert reconcile.effective_minutes(None, 0) == reconcile.DEFAULT_MINUTES
+    assert reconcile.effective_minutes(None, "nonsense") == reconcile.DEFAULT_MINUTES
+
+
+def test_decide_is_untouched_by_an_extra_minutes_field():
+    # The whole fence: `minutes` is data the reconcile decision never reads, so
+    # gen ordering, TTL, the boot rule and the event vocabulary are unchanged.
+    plain = _slot(19, "start", "bathtime")
+    with_minutes = _slot(19, "start", "bathtime")
+    with_minutes["minutes"] = 3
+    panel = {"boot": "b1", "last_boot": "b1", "state": "ambient", "routine": None}
+    assert reconcile.decide(with_minutes, 18, panel, 1000) == \
+        reconcile.decide(plain, 18, panel, 1000)

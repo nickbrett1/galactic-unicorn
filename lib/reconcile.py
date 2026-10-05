@@ -49,6 +49,12 @@ ACTION_CANCEL = "cancel"
 ACTION_NONE = "none"
 DESIRED_ACTIONS = (ACTION_START, ACTION_CANCEL, ACTION_NONE)
 
+# The optional remote-chosen countdown length (device-protocols.md section 3):
+# an INTEGER number of minutes, one of these, absent meaning "use the routine's
+# own". The unit is minutes because that is what routines.json already uses.
+MINUTES_CHOICES = (1, 3, 5)
+DEFAULT_MINUTES = 5
+
 # The panel's own states as REPORTED BY THE BOARD. AMBIENT, PROMPT, COUNTDOWN
 # and HANDOFF are the wire vocabulary; the board also has an OFF state that is
 # never reported (see NOTES.md).
@@ -87,6 +93,65 @@ def banner_for(message, state):
     if not text or mid is None:
         return None
     return (mid, str(text))
+
+# -- the remote-chosen countdown length (device-protocols.md section 3) ------
+#
+# The duration rides ALONGSIDE the start the way `routine` already does. It is
+# content, not an event: it adds no fifth event and moves no `gen`. Everything
+# below is pure so the rule is pinned on the host (tests/test_reconcile.py);
+# the engine (lib/routine.py) only carries out the answer.
+
+def valid_minutes(value):
+    """True if `value` is one of the offered remote lengths (1|3|5).
+
+    `bool` is rejected explicitly. In Python `True == 1`, so without this a
+    JSON `true` would pass as a one-minute countdown - a value the service
+    would reject and the board must not silently accept.
+    """
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, int):
+        return False
+    return value in MINUTES_CHOICES
+
+
+def requested_minutes(desired):
+    """The remote's requested countdown length for a `start`, or None.
+
+    None means "no request": the board falls back to the routine's own
+    `minutes`, exactly as if the field were absent. A `cancel`/`none` slot, a
+    missing field, a non-integer, or any value outside 1|3|5 all give None.
+    The server validates too; this is the board's defensive half, so an
+    out-of-range value cannot change a countdown.
+    """
+    if not desired or desired.get("action") != ACTION_START:
+        return None
+    value = desired.get("minutes")
+    if not valid_minutes(value):
+        return None
+    return value
+
+
+def effective_minutes(requested, routine_minutes):
+    """The length a countdown runs for, in minutes.
+
+    A valid `requested` (1|3|5) wins; otherwise the routine's own `minutes`
+    from routines.json; otherwise `DEFAULT_MINUTES`. With no request this is
+    exactly the old behaviour, so a physical press and an old remote are
+    identical by construction.
+    """
+    if valid_minutes(requested):
+        return requested
+    if routine_minutes is None:
+        return DEFAULT_MINUTES
+    try:
+        value = int(routine_minutes)
+    except (TypeError, ValueError):
+        return DEFAULT_MINUTES
+    if value <= 0:
+        return DEFAULT_MINUTES
+    return value
+
 
 # Decision kinds returned by decide().
 DECISION_APPLY = "apply"

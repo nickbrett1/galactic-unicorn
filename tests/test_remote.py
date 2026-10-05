@@ -475,3 +475,91 @@ def test_message_done_still_adopts_a_new_id():
     remote.Remote._update_banner(s, {"message": {"id": 5, "text": "Bye"}}, "ambient")
     assert s.message_id == 5
     assert s.message_text == "Bye"
+
+
+# -- the remote-chosen countdown length (device-protocols.md section 3) -------
+#
+# The duration rides alongside a start: the remote validates the slot and hands
+# the length to the engine, which uses it only when the countdown that follows
+# begins. `_apply` is the seam: it must forward a requested length, forward
+# None when the field is absent (old remote == physical press), and never carry
+# a length on a cancel.
+
+class _EngineStub:
+    def __init__(self):
+        self.events = []
+
+    def post_event(self, event, minutes=None):
+        self.events.append((event, minutes))
+
+
+class _ApplyStub:
+    """Only what Remote._apply touches, so the forward seam is pinned."""
+
+    _apply = remote.Remote._apply
+    _update_banner = remote.Remote._update_banner
+
+    def __init__(self, applied_gen=18):
+        self.panel = {"boot": "b1", "last_boot": "b1"}
+        self.applied_gen = applied_gen
+        self.gen_file = None
+        self.floor_ms = 1000
+        self.ceiling_ms = 10000
+        self.engine = _EngineStub()
+        self.message_id = None
+        self.message_text = None
+        self.message_at = 0
+        self.message_shown = None
+        self.logs = []
+        self.next_poll_ms = None
+
+    def log(self, message):
+        self.logs.append(message)
+
+    def _schedule(self, now, ms):
+        self.next_poll_ms = ms
+
+
+def _apply_with_stub(slot, report, stub):
+    # No flash touch on the host: record the write instead of doing it.
+    original = remote._write_gen
+    events = []
+    remote._write_gen = lambda path, gen: events.append(gen)
+    try:
+        stub._apply(slot, report, 1000)
+    finally:
+        remote._write_gen = original
+    return events
+
+
+def test_apply_forwards_the_requested_minutes_to_the_engine():
+    slot = {"gen": 19, "action": "start", "routine": "bathtime", "minutes": 3}
+    stub = _ApplyStub()
+    written = _apply_with_stub(slot, {"state": "ambient"}, stub)
+    assert stub.engine.events == [("bathtime", 3)]
+    assert stub.applied_gen == 19
+    assert written == [19]
+    assert any("minutes=3" in line for line in stub.logs)
+
+
+def test_apply_forwards_none_when_minutes_absent():
+    # An absent field must reach the engine as None, so the engine falls back
+    # to routines.json exactly as a physical press would.
+    slot = {"gen": 19, "action": "start", "routine": "bathtime"}
+    stub = _ApplyStub()
+    _apply_with_stub(slot, {"state": "ambient"}, stub)
+    assert stub.engine.events == [("bathtime", None)]
+
+
+def test_apply_refuses_an_out_of_range_length():
+    slot = {"gen": 19, "action": "start", "routine": "bathtime", "minutes": 2}
+    stub = _ApplyStub()
+    _apply_with_stub(slot, {"state": "ambient"}, stub)
+    assert stub.engine.events == [("bathtime", None)]
+
+
+def test_apply_never_forwards_a_length_for_a_cancel():
+    slot = {"gen": 19, "action": "cancel", "minutes": 3}
+    stub = _ApplyStub()
+    _apply_with_stub(slot, {"state": "countdown", "routine": "bathtime"}, stub)
+    assert stub.engine.events == [("reset", None)]

@@ -9,6 +9,7 @@ import time
 
 import bigfont
 import icons
+import reconcile
 from display import GREEN, HEIGHT, WHITE, WIDTH, traffic_rgb
 
 AMBIENT = "ambient"
@@ -76,6 +77,14 @@ class Engine:
         # so the panel's rules are unchanged: the remote is a second producer
         # of the button events, not a feature (memo section 3).
         self._injected = []
+        # A remote-chosen countdown length, riding alongside the event the way
+        # `routine` does (device-protocols.md section 3). At most ONE is held,
+        # only for the remote start that set it, and never persisted: it is
+        # consumed when the countdown starts, dropped on cancel, and dropped
+        # when the selection switches to another routine. A physical press
+        # never sets it, so physical presses keep routines.json minutes.
+        self._pending_minutes = None
+        self._pending_minutes_routine = None
 
     # -- helpers ---------------------------------------------------------
 
@@ -98,7 +107,7 @@ class Engine:
         """Seconds left on the countdown, as the contract's integer."""
         return self.remaining_ms(now) // 1000
 
-    def post_event(self, event):
+    def post_event(self, event, minutes=None):
         """Queue a wire event (a routine id or "reset") from a non-button source.
 
         The remote emits the SAME event the button would (memo section 3), so
@@ -106,8 +115,15 @@ class Engine:
         the ordinary button dispatch on the next tick. Nothing about the state
         machine changes: a routine event is still inert during COUNTDOWN, and
         reset is still the D event, live in every active state.
+
+        `minutes` is the optional remote-chosen countdown length, riding
+        alongside the start the way `routine` does. It is a value, not an
+        event: it is validated by reconcile.requested_minutes before it gets
+        here, adds no fifth event, and is only consulted when the countdown
+        that follows this start begins. None leaves the routine's own
+        routines.json `minutes` in charge.
         """
-        self._injected.append(event)
+        self._injected.append((event, minutes))
 
     def _button_event(self, event):
         """The (kind, name) button event that produces wire `event`, or None."""
@@ -137,6 +153,13 @@ class Engine:
         routine = self._by_id(rid)
         if routine is None:
             return
+        # A remote-chosen length belongs to the routine the remote asked for.
+        # Switching the selection to another routine (a different button, or a
+        # later remote start) drops it, so it can never leak onto a countdown
+        # it was not meant for.
+        if self._pending_minutes_routine is not None and self._pending_minutes_routine != rid:
+            self._pending_minutes = None
+            self._pending_minutes_routine = None
         self.routine = routine
         self._enter(PROMPT, now)
         # Deliberately silent: nothing sounds until the timer expires.
@@ -144,7 +167,16 @@ class Engine:
     def start_countdown(self, now):
         if self.routine is None:
             return
-        total_ms = int(self.routine.get("minutes", 5)) * 60 * 1000
+        # The remote's requested length wins for the countdown its start led
+        # to; otherwise the routine's own routines.json `minutes`, so a
+        # physical press and an old remote are identical. The override is
+        # per-command: consumed here and never persisted.
+        minutes = reconcile.effective_minutes(
+            self._pending_minutes, self.routine.get("minutes")
+        )
+        self._pending_minutes = None
+        self._pending_minutes_routine = None
+        total_ms = int(minutes) * 60 * 1000
         if self.config.DEMO_SECONDS > 0:
             # Demo mode: a real run, compressed - so the whole transition can
             # be watched in seconds rather than minutes.
@@ -157,6 +189,8 @@ class Engine:
         """Silent by design: a reset must not sound like a fourth event."""
         self.audio.stop()
         self.routine = None
+        self._pending_minutes = None
+        self._pending_minutes_routine = None
         self._enter(AMBIENT, now)
 
     # -- button dispatch -------------------------------------------------
@@ -312,16 +346,32 @@ class Engine:
 
     # -- main tick -------------------------------------------------------
 
+    def _drain_injected(self, events):
+        """Translate queued remote events into button events, in place.
+
+        Split out of tick() so the remote seam is host-testable without a
+        frame: it renders nothing and reads no hardware. A remote event takes
+        exactly the path a physical press takes; the only extra it carries is
+        the optional countdown length, remembered only for an event that
+        actually maps to a press (so a routine the button map would drop
+        cannot leave a length behind).
+        """
+        if not self._injected:
+            return
+        for event, minutes in self._injected:
+            mapped = self._button_event(event)
+            if mapped is not None:
+                if minutes is not None:
+                    self._pending_minutes = minutes
+                    self._pending_minutes_routine = event
+                events.append(mapped)
+        del self._injected[:]
+
     def tick(self, now):
         events = self.buttons.poll(now)
         # Remote events arrive between polls; fold them into the same list so
         # they take exactly the path a physical press takes.
-        if self._injected:
-            for event in self._injected:
-                mapped = self._button_event(event)
-                if mapped is not None:
-                    events.append(mapped)
-            del self._injected[:]
+        self._drain_injected(events)
         self._handle_events(events, now)
 
         # Walk the time-is-up jingle. One step per frame, so the tune plays

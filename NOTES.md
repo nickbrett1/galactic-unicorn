@@ -945,3 +945,48 @@ Tests updated: `tests/test_reconcile.py` and `tests/test_routine_minutes.py`
 enumerate the choices, so each gained `10` in its accepted set plus `10`-accepts
 and `6`/`7`/`15`/non-integer-falls-back cases. `tests/test_remote.py` pins the
 forwarding seam by value and is unchanged.
+
+### T6.1 follow-up — "selecting 10 minutes started a 5-minute timer" — 2026-10-08
+
+A report against the **remote UI** ("selecting 10 minutes starts a 5-minute
+timer") was traced here, and the board's half of the rule was **not** at fault.
+It was the panel running the **pre-T6.1 firmware**.
+
+Root cause: the panel was on **fw 0.1.50**, which ships `MINUTES_CHOICES =
+(1, 3, 5)`. On 0.1.50 `reconcile.valid_minutes(10)` is `False`, so
+`requested_minutes(desired)` returns `None` and `effective_minutes` falls back
+to the routine's own `routines.json` `minutes` — `5`. The chain was therefore
+remote sends `minutes=10` → server relays `10` (verified) → **0.1.50 panel
+discards `10` and starts the routine default `5`**. No remote code was wrong;
+the remote was validated end-to-end separately (`/api/start` answered
+`"minutes":10`, the UI posted `{"routine":"bathtime","minutes":10}`).
+
+Resolution: this is the documented **slow-OTA landing**, not a defect. 0.1.50 →
+0.1.51 is a single `lib/reconcile.py` commit; `lib/updater.py`, `boot.py` and
+`config.py` are byte-identical across the two tags, and 0.1.50 already carries
+both the in-loop retry (`check_for_update` on `UPDATE_RETRY_MS`, 15 min) and the
+ENOSPC reclaim added in 45210a1. The panel was up ~4 days on 0.1.50 with the
+boot-time WiFi join missing, exactly the case the in-loop retry exists to catch;
+it picked 0.1.51 up on its next power-on (`reset_cause` 1 = PWRON) and booted
+`fw=0.1.51` at 2026-10-08 ~23:1x UTC.
+
+Verified live after the update, against the real service:
+
+- `POST /api/start {"routine":"bathtime","minutes":10}` → `202`,
+  `{"gen":41,...,"minutes":10}`.
+- the panel applied it (`applied_gen` 41) and reported **`state=countdown`,
+  `routine=bathtime`, `remaining_s`≈595** — a genuine ten-minute timer.
+- `POST /api/cancel` → panel back to `ambient`, `applied_gen` 42.
+
+So T6.1 works end-to-end on the panel once it is on 0.1.51. The remote also
+gained a defensive guard (its `src/lib/ui/firmware.js`): it greys out a length
+the connected panel's reported `fw` cannot honour (`< 0.1.51` ⇒ no 10-min
+button), so the UI can never again offer `10` to a panel that would silently
+downgrade it.
+
+Structural note, unchanged and worth repeating: `lib/updater.py` and `boot.py`
+are **excluded from the pack**, so an updater defect can never be delivered over
+the channel it repairs — any fix to the updater itself needs a USB deploy
+(`scripts/rescue-usb.py`). That is by design; it is also why "the board is on an
+old version" has to be diagnosed from `fw` in `GET /api/state` and the device's
+own `update.log`, never from the remote alone.

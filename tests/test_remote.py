@@ -552,7 +552,7 @@ def test_apply_forwards_none_when_minutes_absent():
 
 
 def test_apply_refuses_an_out_of_range_length():
-    slot = {"gen": 19, "action": "start", "routine": "bathtime", "minutes": 2}
+    slot = {"gen": 19, "action": "start", "routine": "bathtime", "minutes": 4}
     stub = _ApplyStub()
     _apply_with_stub(slot, {"state": "ambient"}, stub)
     assert stub.engine.events == [("bathtime", None)]

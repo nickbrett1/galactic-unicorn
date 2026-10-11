@@ -990,3 +990,38 @@ the channel it repairs — any fix to the updater itself needs a USB deploy
 (`scripts/rescue-usb.py`). That is by design; it is also why "the board is on an
 old version" has to be diagnosed from `fw` in `GET /api/state` and the device's
 own `update.log`, never from the remote alone.
+
+## T6.2 — remote countdown choices extended to 2 minutes — 2026-10-11
+
+Mirrors `galactic-unicorn-remote` (the sibling repo, the same commit that adds
+`2` to its `src/lib/minutes.js`). The remote's selector now offers **1, 2, 3, 5
+or 10** minutes (was 1/3/5/10); the default stays **5**.
+
+The board's half of the mirrored rule is again a single value: `MINUTES_CHOICES`
+in `lib/reconcile.py` grows from `(1, 3, 5, 10)` to `(1, 2, 3, 5, 10)`.
+`DEFAULT_MINUTES` is unchanged at `5`. Nothing else moves, for exactly the
+reasons recorded under T6.1:
+
+- `valid_minutes` / `requested_minutes` / `effective_minutes` are unchanged
+  logic — they only read `MINUTES_CHOICES`, so `2` is now accepted and applied
+  while `4`, `6`, `7`, `15` and non-integers still fall back to the routine's own
+  `routines.json` `minutes`, byte-identical to a physical press.
+- `minutes` remains per-command data on a `start` only, never persisted; the
+  four device events, `gen` ordering, TTL, boot-id clearing and `decide()` are
+  untouched.
+- `lib/routine.py`, `lib/remote.py` and the wire vocabulary need no change.
+
+Shipped as board **`0.1.52`**, the next release after the `0.1.51` that carried
+T6.1 — so a panel must be on `0.1.52` or newer to honour `2`.
+
+Tests updated: `tests/test_reconcile.py` and `tests/test_routine_minutes.py`
+enumerate the choices, so each gained `2` in its accepted set plus a `2`-accepts
+case and dropped `2` from its falls-back cases; a dedicated
+`test_requested_minutes_reads_the_new_two_minute_choice` mirrors the 10-minute
+one. `tests/test_remote.py` pins the forwarding seam by value and is unchanged.
+
+The remote's defensive guard (`src/lib/ui/firmware.js`) mirrors the split: `10`
+needs `fw >= 0.1.51` (`TEN_MINUTES_SINCE`) and `2` needs `fw >= 0.1.52`
+(`TWO_MINUTES_SINCE`), so the UI offers each length only to a panel whose
+firmware would actually honour it — same "better no button than a lie" rule as
+the T6.1 follow-up.

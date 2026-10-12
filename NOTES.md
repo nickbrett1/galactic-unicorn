@@ -1058,3 +1058,70 @@ No wire change, no `lib/remote.py` change, no `gen`/TTL/ordering change. Pure
 module logic is unchanged, so the host suite is unaffected.
 
 Shipped as board **`0.1.53`**.
+
+## T6.4 — boot crash-loop: MemoryError on the deferred imports — 2026-10-12
+
+Bug, and a harder one than T6.3: where the remote attach *degraded*, this one
+*kills the boot*, so the board reboot-loops under the watchdog.
+
+Found from the outside: the service showed the panel `online:false`,
+`last_seen_s` ~29800 (8h20m), a frozen `uptime_s:131`, `applied_gen:53`,
+`reset_cause:1`. Serial over USB (the board is cabled to the Mac Studio)
+showed the board coming up and dying every boot:
+
+```
+Traceback (most recent call last):
+  File "main.py", line 395, in main
+MemoryError: memory allocation failed, allocating 3780 bytes
+...
+Traceback (most recent call last):
+  File "main.py", line 640, in <module>
+  File "main.py", line 395, in main
+MemoryError: memory allocation failed, allocating 3780 bytes
+```
+
+Line 395 is `from sound import Audio` — the **last** of the four deferred
+module imports (`ambient`, `buttons`, `routine`, `sound`) that `main()` does
+behind the loading frame. Line 640 is the module-level `main()` call. A genuine
+power cycle (Kasa `on_time` reset) did not clear it; each boot re-enters the
+same crash. It is not Wi-Fi, not radio, and not the service.
+
+**Why exactly there.** Each of these imports is a large *contiguous*
+allocation: MicroPython reads the whole source file into one block and then
+compiles it. They run in sequence on a heap the display has already carved up
+(the ~10.7 KB PicoGraphics framebuffer is resident from `Display()` just
+above), and the fragmentation accumulates *across* the four — so the last one
+is the likeliest to find no single free block big enough. This is precisely the
+T6.3 shape (`import remote`, `allocating 2344 bytes`) and the 2026-09-27 shape
+(`gc.mem_free()` 93488, `allocating 3840 bytes`), just at boot and fatal.
+
+**Fix, in `main.py` only** (so it ships over OTA, unlike boot.py/updater.py):
+
+- **`gc.collect()` before EACH deferred import**, not once up front — the
+  fragmentation grows between them, so the collect has to happen between them.
+- **Retry the whole block once** on `MemoryError`. Imports are cached in
+  `sys.modules`, so a retry re-imports only the one that missed; a single
+  unlucky boot self-heals instead of dying to the watchdog. A second failure
+  re-raises into the existing handler, and the updater's rollback slot is the
+  recovery for a release that genuinely cannot come up.
+
+No wire change, no module-logic change, host suite unaffected.
+
+**Deploy/recovery for the cabled board.** `boot.py` and `lib/updater.py` are
+unaffected (the crash is in `main.py`, which runs *after* the updater's phase
+1/phase 2), so the board can still be repaired either way:
+
+1. **OTA (preferred, no cable).** Publish the fix as the next release; the
+   board's `boot.py` update check still runs on every boot, so it will fetch
+   and apply the new pack on the next boot with a working network, then reboot
+   into the fixed `main.py`.
+2. **USB (fastest and deterministic).** `./scripts/deploy.sh` from the Mac
+   Studio, which the board is cabled to. It also re-stamps `version.txt`, so
+   the board will not then re-apply an older OTA over the USB tree.
+3. **Rollback to the last known-good (0.1.52).** The updater's own protocol is
+   supposed to do this after `BOOT_WDT_MAX` watchdog-cut boots — but 8h20m of
+   looping means it did not, so treat an automatic rollback as unreliable here
+   and recover over USB. Worth checking while on the wire: whether `:prev`
+   exists at all (`_has_rollback()`), and whether `boot-wdt.txt` is being
+   written (a full flash would make the counter unpersistable and the release
+   unrollbackable).

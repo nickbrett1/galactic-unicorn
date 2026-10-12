@@ -389,10 +389,44 @@ def main():
         # takes a second or two" actually was after boot.py's own look at the
         # network. A failure to import is still loud: it lands in the handler
         # below, which is the documented behaviour for a broken deploy.
-        from ambient import Ambient
-        from buttons import Buttons
-        from routine import Engine
-        from sound import Audio
+        #
+        # BUT a MemoryError here is NOT a broken deploy, and must not be
+        # treated like one - that is the difference between a panel that
+        # self-heals and one that dies to the watchdog and reboot-loops. Each
+        # of these imports is a large CONTIGUOUS allocation (MicroPython reads
+        # the whole source into one block, then compiles it), and they run in
+        # sequence on a heap the ~10.7 KB PicoGraphics framebuffer (Display,
+        # just above) has already carved up. Fragmentation accumulates across
+        # the four, so the LAST is the likeliest to miss.
+        #
+        # Measured on the board 2026-10-12, fw 0.1.53: a crash/reboot loop with
+        # `MemoryError: memory allocation failed, allocating 3780 bytes` at
+        # `from sound import Audio` - every boot, every reset, and a power cycle
+        # did not clear it. It is the same boot-heap fragmentation the remote
+        # attach hits (2026-10-11) and the in-loop update check hits
+        # (2026-09-27); the remedy is the same, plus one addition. Collect
+        # BEFORE each import rather than once up front, then retry the whole
+        # block once if one still misses: imports are cached in sys.modules, so
+        # a retry re-imports only the one that failed, and a single unlucky boot
+        # self-heals instead of taking the whole session down.
+        for attempt in range(2):
+            try:
+                gc.collect()
+                from ambient import Ambient
+                gc.collect()
+                from buttons import Buttons
+                gc.collect()
+                from routine import Engine
+                gc.collect()
+                from sound import Audio
+                break
+            except MemoryError as exc:
+                if attempt:
+                    # Not transient: report it (the handler below) rather than
+                    # spin. The updater's rollback slot is the recovery for a
+                    # release that genuinely cannot come up on this board.
+                    raise
+                log("deferred import MemoryError, retrying after a collect: " + repr(exc))
 
         # Instrumentation, not machinery: main.py can be hand-deployed over USB
         # without it (lib/updater.py is deployed that way), so a missing module

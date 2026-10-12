@@ -53,8 +53,14 @@ BOOT_OK_SOAK_MS = 10000
 # of the session, so the attach is retried a few times from the loop with a
 # gc.collect() first - the boot garbage is what the allocation was competing
 # with. Bounded, and it says when it stops trying.
-REMOTE_ATTACH_RETRIES = 3
-REMOTE_ATTACH_RETRY_MS = 10000
+#
+# Measured 2026-10-11: a session failed the initial attach AND every retry, and
+# only then logged "gave up". Three tries spaced 10 s is a 30 s window - too
+# short if the fragmentation does not clear until later in the loop, and the
+# cost of losing is a whole session with no remote control. Four tries spaced
+# 30 s span two minutes before the panel is written off for the session.
+REMOTE_ATTACH_RETRIES = 4
+REMOTE_ATTACH_RETRY_MS = 30000
 
 
 def _attach_remote(engine, config, log, fw):
@@ -455,6 +461,16 @@ def main():
     # allocating 640 bytes" at /lib/remote.py line 50). The old code gave up
     # then and there, and the log never mentioned the remote again - a single
     # unlucky boot silently cost remote control for the whole session.
+    #
+    # Collect before this FIRST attempt too, not just the retries below. The
+    # initial attach used to run on a heap still carrying every boot-time
+    # temporary (the routines JSON, the NTP reply, the weather body), so it
+    # competed for one contiguous block against garbage the retries had already
+    # cleaned away - which is why the first attempt was the likeliest to fail.
+    # Measured 2026-10-11: a boot that failed here with "allocating 2344 bytes"
+    # gave up for the whole session, and the panel stopped polling the service
+    # until the next power cycle.
+    gc.collect()
     remote, remote_retryable = _attach_remote(engine, config, log, firmware_version())
     remote_retries = REMOTE_ATTACH_RETRIES if (remote is None and remote_retryable) else 0
     remote_retry_at = time.ticks_ms()

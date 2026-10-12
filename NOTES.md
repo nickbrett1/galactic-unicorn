@@ -1025,3 +1025,36 @@ needs `fw >= 0.1.51` (`TEN_MINUTES_SINCE`) and `2` needs `fw >= 0.1.52`
 (`TWO_MINUTES_SINCE`), so the UI offers each length only to a panel whose
 firmware would actually honour it — same "better no button than a lie" rule as
 the T6.1 follow-up.
+
+## T6.3 — remote attach hardened against boot heap fragmentation — 2026-10-12
+
+Bug, not a feature. After a cold power cycle a panel could come up showing
+weather and running its routine loop but **never polling the service**, so the
+remote page reported it offline and the phone could not drive it at all until
+the next power cycle. Serial capture (2026-10-11) found the cause: `main.py`
+built the phase-2 remote with `_attach_remote(...)` right after the boot-time
+allocations, that construction raised
+`MemoryError: memory allocation failed, allocating 2344 bytes`, and after every
+retry the loop logged `remote: gave up building the remote this session` — the
+session was abandoned. `gc.mem_free()` read **96880** at the same boot, so it
+was heap *fragmentation*, not exhaustion: the boot temporaries (the routines
+JSON, the NTP reply, the weather body) split the free list so the one large
+contiguous block `import remote` needs could not be found. Intermittent — a
+soft reboot on the same board came up clean and polled normally.
+
+Two changes in `main.py`:
+
+- **`gc.collect()` before the FIRST attach.** Only the retry path collected;
+  the initial attempt ran on the freshest-but-dirtiest heap, which is why it
+  was the likeliest to fail. One collect consolidates the free list before the
+  import competes, mirroring the collect already used on the retry path and
+  before the in-loop update check.
+- **A wider retry ladder.** `REMOTE_ATTACH_RETRIES` 3 -> 4 and
+  `REMOTE_ATTACH_RETRY_MS` 10000 -> 30000, so the loop spans two minutes
+  before writing the session off, instead of 30 s. The 2026-10-11 session
+  failed every one of the old three tries, so 30 s was demonstrably too short.
+
+No wire change, no `lib/remote.py` change, no `gen`/TTL/ordering change. Pure
+module logic is unchanged, so the host suite is unaffected.
+
+Shipped as board **`0.1.53`**.

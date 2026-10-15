@@ -306,7 +306,7 @@ UPDATE_ENABLED = True
 # The pack is fetched from the same directory as the manifest (updater._update
 # derives the base by dropping the last path segment), so this is the only
 # string that has to change to move the source again.
-UPDATE_MANIFEST_URL = "http://192.168.1.2:3009/firmware/manifest.json"
+UPDATE_MANIFEST_URL = "http://192.168.1.69:3009/firmware/manifest.json"
 
 # The bound on EVERY socket operation of an update fetch - connect and each
 # individual read alike (lib/net.py:http_get sets it on the socket).
@@ -342,7 +342,7 @@ REMOTE_ENABLED = True
 # The service's LAN address and port. A literal IP, so the poll does no DNS -
 # the board is already on the same subnet, and a name would only add a lookup
 # that can fail. Firewalled to the LAN; it is never reachable from the internet.
-REMOTE_SERVICE_URL = "http://192.168.1.2:3009"
+REMOTE_SERVICE_URL = "http://192.168.1.69:3009"
 
 # The board-side clamp on the server's `next_poll_ms` (device-protocols.md
 # section 6). The server sets the cadence; these are the floors and ceilings

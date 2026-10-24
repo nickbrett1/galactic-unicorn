@@ -1,5 +1,5 @@
 {
-  "comment": "The routine table is config, not logic (memo section 5). Edit and reload without reflashing. The button binding is part of the config too, even though the physical labels are fixed.",
+  "comment": "The routine table is config, not logic (memo section 5). Edit and reload without reflashing. The button binding is part of the config too, even though the physical labels are fixed. `shoes` has no button: the board has three routine buttons (A/B/C) and D cancels, so Shoes On is remote-only - the web UI is the only place it can be started.",
   "buttons": {
     "A": "bathtime",
     "B": "booktime",
@@ -33,6 +33,14 @@
       "button": "C",
       "symbol": "toy-box",
       "end_message": "CLEAN UP!"
+    },
+    {
+      "id": "shoes",
+      "label": "Shoes",
+      "kind": "lead-in",
+      "minutes": 5,
+      "symbol": "shoe",
+      "end_message": "SHOES ON!"
     }
   ]
 }

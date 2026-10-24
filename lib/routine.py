@@ -111,15 +111,16 @@ class Engine:
         """Queue a wire event (a routine id or "reset") from a non-button source.
 
         The remote emits the SAME event the button would (memo section 3), so
-        this translates it to the button press that produces it and hands it to
-        the ordinary button dispatch on the next tick. Nothing about the state
-        machine changes: a routine event is still inert during COUNTDOWN, and
-        reset is still the D event, live in every active state.
+        this translates it to the button press that produces it - or, for a
+        routine with no button (`shoes`), to a `("remote", <id>)` event - and
+        hands it to the ordinary dispatch on the next tick. Nothing about the
+        state machine changes: a routine event is still inert during COUNTDOWN,
+        and reset is still the D event, live in every active state.
 
         `minutes` is the optional remote-chosen countdown length, riding
         alongside the start the way `routine` does. It is a value, not an
         event: it is validated by reconcile.requested_minutes before it gets
-        here, adds no fifth event, and is only consulted when the countdown
+        here, adds no new event, and is only consulted when the countdown
         that follows this start begins. None leaves the routine's own
         routines.json `minutes` in charge.
         """
@@ -223,6 +224,22 @@ class Engine:
 
     def _handle_routine_event(self, kind, name, now):
         st = self.state
+
+        # A remote start for a routine the panel has no button for (Shoes On).
+        # It takes the same path a button press takes - PROMPT, then the usual
+        # auto-advance to COUNTDOWN - and obeys the same rules: inert while a
+        # countdown runs, and a second ask for the routine already selected
+        # starts it. The panel gains no notion of a remote override.
+        if kind == "remote":
+            if st == AMBIENT or st == OFF:
+                if self._by_id(name) is not None:
+                    self.start_prompt(name, now)
+            elif st == PROMPT:
+                if self.routine is not None and name == self.routine.get("id"):
+                    self.start_countdown(now)
+                elif self._by_id(name) is not None:
+                    self.start_prompt(name, now)
+            return
 
         if st == AMBIENT or st == OFF:
             if kind == "press" and name in self.button_map:
@@ -365,6 +382,15 @@ class Engine:
                     self._pending_minutes = minutes
                     self._pending_minutes_routine = event
                 events.append(mapped)
+            elif self._by_id(event) is not None:
+                # A routine with no button of its own (Shoes On). It is still a
+                # routine event, so it enters the same dispatch under its own
+                # name instead of being dropped by the button map; the length
+                # it carries is remembered exactly as it is for a mapped press.
+                if minutes is not None:
+                    self._pending_minutes = minutes
+                    self._pending_minutes_routine = event
+                events.append(("remote", event))
         del self._injected[:]
 
     def tick(self, now):

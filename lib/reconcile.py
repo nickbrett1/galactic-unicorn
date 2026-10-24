@@ -34,12 +34,14 @@ parity, so the decision is total and testable on the host. See
 # These are the WIRE values (device-protocols.md sections 2-3). The board's
 # routines.json is a separate table; where they disagree see NOTES.md.
 
-# The three routine ids on the wire. The service's reconcile.js derives these
-# from routines.json; here they are the frozen contract.
-ROUTINE_IDS = ("bathtime", "booktime", "cleanup")
+# The routine ids on the wire. The service's reconcile.js derives these from
+# routines.json; here they are the frozen contract. `shoes` has no physical
+# button (the panel has A/B/C plus D for cancel), so it can only be started
+# from the remote - but it is still a routine event like any other.
+ROUTINE_IDS = ("bathtime", "booktime", "cleanup", "shoes")
 
-# The four device events, and nothing else (memo section 3, event-flow.md
-# section 1 invariant 4). `reset` is the D button.
+# The device events, and nothing else (memo section 3, event-flow.md section 1
+# invariant 4). `reset` is the D button; the rest are the routine starts.
 EVENT_RESET = "reset"
 DEVICE_EVENTS = ROUTINE_IDS + (EVENT_RESET,)
 

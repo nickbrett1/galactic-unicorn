@@ -183,11 +183,15 @@ def test_decide_cancel_in_ambient_is_a_noop():
     assert (kind, detail) == ("noop", "nothing_to_cancel")
 
 
-# -- the four-event vocabulary ------------------------------------------------
+# -- the event vocabulary -----------------------------------------------------
 
-def test_event_vocabulary_is_exactly_four_events():
-    assert reconcile.DEVICE_EVENTS == ("bathtime", "booktime", "cleanup", "reset")
-    assert reconcile.ROUTINE_IDS == ("bathtime", "booktime", "cleanup")
+def test_event_vocabulary_is_exactly_the_routines_plus_reset():
+    # `shoes` is a routine like any other on the wire. It has no physical
+    # button, but the board must accept and run it (the remote starts it).
+    assert reconcile.DEVICE_EVENTS == (
+        "bathtime", "booktime", "cleanup", "shoes", "reset")
+    assert reconcile.ROUTINE_IDS == (
+        "bathtime", "booktime", "cleanup", "shoes")
 
 
 # -- the server-side conflict table (mirrored, so both sides agree) -----------

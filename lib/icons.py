@@ -189,6 +189,26 @@ def _falling_box(top):
 # Four frames: high, lower, at the mouth, then settled in the bottom.
 BOXES = tuple(_overlay(_BIG_BOX, _falling_box(top)) for top in (0, 2, 4, 7))
 
+# A side-on sneaker for the remote-only "Shoes On" routine: ankle collar on the
+# left, toe to the right, a solid sole across the bottom two rows so the shape
+# still reads at 10x11 from across the room. One still frame - the routine is a
+# short wait, not an animation, and the countdown is where the movement is.
+_SHOE = (
+    "..........",
+    "..........",
+    "...XXX....",
+    "..X...X...",
+    "..X...X...",
+    "..X...XXXX",
+    "..XXXXXXXX",
+    ".XXXXXXXXX",
+    "XXXXXXXXXX",
+    "XXXXXXXXXX",
+    "..........",
+)
+
+SHOE = (_SHOE,)
+
 ICONS = {
     "bath": BATH,
     "tap": TAP,
@@ -197,6 +217,8 @@ ICONS = {
     # The wire/server name for the third routine's symbol (routines.json).
     # Was "boxes"; renamed so the panel draws the routine the server sends.
     "toy-box": BOXES,
+    # Shoes On (routines.json): remote-only, but the panel still draws it.
+    "shoe": SHOE,
 }
 
 

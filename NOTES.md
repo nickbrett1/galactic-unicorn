@@ -1125,3 +1125,52 @@ unaffected (the crash is in `main.py`, which runs *after* the updater's phase
    exists at all (`_has_rollback()`), and whether `boot-wdt.txt` is being
    written (a full flash would make the counter unpersistable and the release
    unrollbackable).
+
+## T7 — task: "Shoes On" timer (remote-only routine) — 2026-10-24
+
+**Ask.** A fourth lead-in timer, "Shoes On", available from the phone, in both this repo and
+`galactic-unicorn-remote`.
+
+**The constraint that shaped it.** The panel has three routine caps (A/B/C) and D cancels, so there is
+no button to give it. `shoes` is therefore the **first remote-only routine**: it exists in
+`routines.json`, in the wire vocabulary, and in the web UI, but not on a physical button. Everything
+else about it is an ordinary routine — same PROMPT, same countdown, same `minutes`, same `reset`.
+
+**Firmware (this repo).**
+
+- `routines.json`: a fourth entry, `id: shoes`, panel label `Shoes` (the remote shows the fuller
+  "Shoes On"), `symbol: shoe`, `minutes: 5`, `end_message: SHOES ON!`. **No `button` key and no
+  `buttons` entry** — the physical map is untouched, so no config edit can conjure a fourth cap.
+- `lib/reconcile.py`: `ROUTINE_IDS` gains `shoes`, so `event_for_desired` accepts the start like any
+  other routine. `DEVICE_EVENTS` is now the four routines plus `reset`.
+- `lib/routine.py`: the remote seam previously translated an event into a *button press*
+  (`_button_event`), which silently dropped any routine without a button. `_drain_injected` now
+  falls back to a `("remote", <routine id>)` event for a known routine with no physical button, and
+  `_handle_routine_event` handles that kind with the same rules: start PROMPT from AMBIENT/OFF,
+  switch PROMPT, shortcut to COUNTDOWN when already selected, inert in COUNTDOWN/HANDOFF. The
+  requested `minutes` is remembered exactly as it is for a mapped press.
+- `lib/icons.py`: a 10x11 side-on sneaker (`shoe`), one still frame.
+- **Label length.** The panel is 53 px. `Shoes On` is 57 px of `bigfont` and would be clipped, so the
+  panel label is `Shoes` (34 px; with the icon, 46 px — the pair fits, unlike `Cleanup`, whose
+  icon+label is 62 px and has always fallen back to drawing both at x=0). The remote keeps
+  "Shoes On" for the web UI, the same way it already says "Bathtime" where the panel says "Bath".
+
+**Remote (sibling repo).**
+
+- `src/lib/routines.json`: `shoes` / "Shoes On" / symbol `shoe` / artwork 👟. The UI already renders
+  one button per catalogue entry, so no component hard-codes the new routine.
+- **Gating, following T6.1.** A board older than the release that ships this (`< 0.1.54`) has
+  `reconcile.event_for_desired` drop the unknown routine while the poll still reports "applied", so
+  the start would vanish. `src/lib/ui/firmware.js` gains `availableRoutines(routines, fw)` and
+  `SHOES_SINCE = "0.1.54"`; `+page.svelte` renders only the routines the reported firmware can start.
+  The version constant must be bumped if this ships in a different release.
+- Specs updated where they stated a count (`device-protocols.md` §2, `event-flow.md` §1,
+  `design-system.md` §1/§3, `implementation-considerations.md`, `description.md` AD-2).
+
+**Tests.** `tests/test_routines.py` (new) pins the catalogue/drawability invariants and the
+remote-only dispatch path; `tests/test_reconcile.py` pins the vocabulary. Remote: `ui-lint`,
+`reconcile`, `backend`, `events`, `ui-page`, `ui-logic` updated for four routines and the gating.
+
+**Not changed.** MQTT, the countdown timing, PROMPT/HANDOFF rendering, the physical button map
+(A/B/C/D), and the `+2 min` hold (still only on the three physical routine buttons — a remote-only
+routine cannot be extended at the panel).

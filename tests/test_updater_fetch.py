@@ -418,13 +418,13 @@ def case_update_sweeps_leftover_staging():
     )
 
 
-def case_update_reclaims_rollback_when_staging_runs_out_of_space():
-    # Measured on the board 2026-10-04: live tree 323 KB, pack 255 KB, and a
-    # resident :prev left only ~44 KB free, so every stage failed OSError(28)
-    # and the board sat on 0.1.48 for three days while the service served
-    # 0.1.49. _update must reclaim the rollback slot (which _apply rebuilds)
-    # and retry once, rather than dead-ending. The first stage raises as the
-    # full filesystem did; the retry must find the slot gone and succeed.
+def case_update_sheds_flash_when_staging_runs_out_of_space():
+    # Measured on the board 2026-10-04 (live tree 323 KB, pack 255 KB, a
+    # resident :prev, ~44 KB free) and again 2026-10-24 (four boots, no :prev
+    # at all). The 768 KB filesystem cannot always hold the live tree, a
+    # rollback copy and :next at once, so _stage fails OSError(28). Two things
+    # are re-derivable and must be shed in order: staging leftovers first,
+    # then the rollback slot - never a dead end.
     files = {"main.py": b"print('new main')\n"}
     blob, entries = _pack(files)
     manifest = {
@@ -438,13 +438,15 @@ def case_update_reclaims_rollback_when_staging_runs_out_of_space():
 
     _device_files(TMP)
     calls = {"n": 0}
-    saw_slot = {"on_fail": None}
+    slot = {}
     real_stage = updater._stage
 
     def flaky(url, fs, sha, timeout_s, limit=updater.MAX_PACK_BYTES):
         calls["n"] += 1
-        if calls["n"] == 1:
-            saw_slot["on_fail"] = os.path.exists(updater.PREV_DIR)
+        slot[calls["n"]] = os.path.exists(updater.PREV_DIR)
+        if calls["n"] <= 2:
+            # The filesystem is still full after the sweep too, so the second
+            # rung (the rollback slot) has to be the one that makes room.
             raise OSError(28)
         return real_stage(url, fs, sha, timeout_s, limit)
 
@@ -460,7 +462,7 @@ def case_update_reclaims_rollback_when_staging_runs_out_of_space():
             os.remove(updater.BOOT_OK_FILE)
         except OSError:
             pass
-        # A resident rollback copy is what ate the free space.
+        # A resident rollback copy is part of what ate the free space.
         os.makedirs(updater.PREV_DIR, exist_ok=True)
         with open(updater.PREV_DIR + "/old.py", "w") as fh:
             fh.write("OLD = 1\n")
@@ -468,11 +470,80 @@ def case_update_reclaims_rollback_when_staging_runs_out_of_space():
     finally:
         updater._stage = real_stage
         os.chdir(cwd)
-    ok = applied is True and calls["n"] == 2 and saw_slot["on_fail"] is True
+    ok = (
+        applied is True
+        and calls["n"] == 3
+        and slot.get(1) is True
+        and slot.get(2) is True
+        and slot.get(3) is False
+    )
     return _report(
-        "out of space: the rollback slot is reclaimed and the stage retried",
+        "out of space: staging swept, then the rollback slot reclaimed",
         ok,
-        f"applied={applied} stages={calls['n']} slot_present_on_fail={saw_slot['on_fail']}",
+        f"applied={applied} stages={calls['n']} slot_per_stage={slot}",
+    )
+
+
+def case_update_gives_up_and_says_how_much_room_was_left():
+    # The 0.1.55 case: no :prev existed, so nothing could be reclaimed. The
+    # update must still fail soft (live tree untouched) rather than loop, and
+    # the log must carry the free figure - four bare `OSError: 28` boots were
+    # the hardest kind of thing to diagnose.
+    files = {"main.py": b"print('new main')\n"}
+    blob, entries = _pack(files)
+    manifest = {
+        "name": "galactic-unicorn",
+        "version": "9.9.9",
+        "pack": {"file": "firmware.pack", "sha256": hashlib.sha256(blob).hexdigest()},
+        "files": entries,
+    }
+    ROUTES["/f/nowhere.json"] = (200, json.dumps(manifest).encode())
+    ROUTES["/f/firmware.pack"] = (200, blob)
+
+    _device_files(TMP)
+    calls = {"n": 0}
+    real_stage = updater._stage
+
+    def always_full(url, fs, sha, timeout_s, limit=updater.MAX_PACK_BYTES):
+        calls["n"] += 1
+        raise OSError(28)
+
+    updater._stage = always_full
+    cwd = os.getcwd()
+    os.chdir(TMP)
+    try:
+        with open(updater.VERSION_FILE, "w") as fh:
+            fh.write("9.9.8\n")
+        try:
+            os.remove(updater.BOOT_OK_FILE)
+        except OSError:
+            pass
+        # Nothing to reclaim: no rollback slot at all, which is the state the
+        # board was in on 2026-10-24.
+        try:
+            updater._rmtree(updater.PREV_DIR)
+        except OSError:
+            pass
+        raised = None
+        try:
+            updater._update(Config(f"http://127.0.0.1:{PORT}/f/nowhere.json"))
+        except OSError as exc:
+            raised = exc
+        with open(updater.LOG_FILE) as fh:
+            log = fh.read()
+    finally:
+        updater._stage = real_stage
+        os.chdir(cwd)
+    ok = (
+        isinstance(raised, OSError)
+        and calls["n"] == 2
+        and "giving up" in log
+        and "free=" in log
+    )
+    return _report(
+        "out of space with nothing to reclaim: fail soft, log the free bytes",
+        ok,
+        f"raised={raised!r} stages={calls['n']} logged_free={'free=' in log}",
     )
 
 
@@ -530,7 +601,8 @@ def main():
             case_apply_moves_the_old_tree_into_the_rollback_slot(),
             case_interrupted_apply_is_rolled_back(),
             case_update_sweeps_leftover_staging(),
-            case_update_reclaims_rollback_when_staging_runs_out_of_space(),
+            case_update_sheds_flash_when_staging_runs_out_of_space(),
+            case_update_gives_up_and_says_how_much_room_was_left(),
             case_update_is_a_noop_on_the_same_version(),
         ]
     finally:

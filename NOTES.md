@@ -1174,3 +1174,41 @@ remote-only dispatch path; `tests/test_reconcile.py` pins the vocabulary. Remote
 **Not changed.** MQTT, the countdown timing, PROMPT/HANDOFF rendering, the physical button map
 (A/B/C/D), and the `+2 min` hold (still only on the three physical routine buttons — a remote-only
 routine cannot be extended at the panel).
+
+## T8 — fix: the updater can always shed flash, and says how much it had (2026-10-24)
+
+**The recurrence.** 0.1.55 reached the board, but `update.log` shows it failing first:
+
+```
+OSError: 28                       (×4, separate boots, inside _stage)
+update check failed, keeping current firmware: OSError(28,)
+applied 0.1.55 (266647 bytes, 18 files)
+```
+
+The old ladder had exactly one rung: on ENOSPC/ENOENT, reclaim `:prev` and retry — and
+**only if `:prev` exists**. On this board it did not (`:prev` ENOENT, zero "reclaiming" lines), so
+every attempt re-raised and the board stayed on the old release until a boot happened to have
+enough room. Free space afterwards: 324 KB of 768 KB, pack 266 KB — 65 KB of margin.
+
+**Fix (`lib/updater.py`, `_stage_or_recover`).** Two rungs, cheapest first, each tried at most once,
+and only for ENOSPC(28)/ENOENT(2):
+
+1. `_cleanup()` — sweep a partial `:next/` or `pack` left by the failed attempt itself;
+2. reclaim `:prev` (and `:cleanup()` again) — `_apply` rebuilds it as it replaces each file, so the
+   cost is a rollback chance, not correctness.
+
+Then it gives up — fail-soft, live tree untouched. Nothing else about the ladder changed.
+
+**Diagnosis for next time.** The staging line now logs free space *before* the attempt
+(`staging <version> (pack=…, free=… B)`), and every rung and the give-up line carry the current
+figure. Four bare `OSError: 28` boots with no size in them cost a session; one line at boot costs
+nothing.
+
+**Not deliverable over OTA — deliberately.** `boot.py` and `lib/updater.py` are excluded from the
+pack (the updater must not be able to replace itself), so this fix reaches the board only over USB
+(`./scripts/deploy.sh`). Until then the board keeps the old ladder. After that, the next release
+tests the new one for real.
+
+**Tests.** `tests/test_updater_fetch.py`: the reclaim case now drives all three stages (sweep, then
+slot), and a new case pins the give-up path — two stages, `OSError(28)` re-raised, `free=` and
+"giving up" in `update.log`.

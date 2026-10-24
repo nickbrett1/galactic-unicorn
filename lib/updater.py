@@ -509,6 +509,89 @@ class _PackSink:
         return self._written
 
 
+def _free_bytes():
+    """Bytes free on the flash root, or -1 when it cannot be read.
+
+    Only ever used in a log line, so a failure to measure must never fail an
+    update - hence the catch-all and the sentinel.
+    """
+    try:
+        stat = os.statvfs("/")
+        # (bsize, frsize, blocks, bfree, bavail, ...) - frsize*bfree is what the
+        # REPL and this module both call "free"; bavail is the same on littlefs.
+        return stat[1] * stat[3]
+    except Exception:  # noqa: BLE001 - diagnostics only
+        return -1
+
+
+def _stage_or_recover(url, files, expect_sha, timeout_s):
+    """Stage the pack, shedding reclaimable flash one rung at a time.
+
+    The 768 KB filesystem cannot always hold the live tree, a rollback copy and
+    :next at once, and the failure is ENOSPC (28) - or ENOENT (2), which is what
+    a _mkdirs that ran out of space surfaces as. Two things can be freed, both
+    re-derivable, so they are tried in order of cost:
+
+      1. staging leftovers. `_update` sweeps before it stages, but an attempt
+         that failed *inside* this call can leave a partial :next/ behind, and
+         that is what the next attempt then trips over.
+      2. the rollback slot. `_apply` rebuilds it as it replaces each file, so
+         dropping it costs a rollback chance, not correctness - and a board
+         that can never update is worse than one with no rollback copy.
+
+    Measured 2026-10-24: four boots logged `OSError: 28` in `_stage` with no
+    `:prev` present, so the old ladder (reclaim the slot only) had nothing to
+    reclaim and re-raised; the board sat on the old release until a boot with
+    enough room. Each rung is tried at most once.
+    """
+    try:
+        return _stage(url, files, expect_sha, timeout_s)
+    except OSError as exc:
+        if not _is_out_of_space(exc):
+            raise
+        _log(
+            "out of space staging (free="
+            + str(_free_bytes())
+            + " B): sweeping staging and retrying"
+        )
+        _cleanup()
+    try:
+        return _stage(url, files, expect_sha, timeout_s)
+    except OSError as exc:
+        # Anything that is not a full filesystem is a real failure: propagate it
+        # unchanged rather than dressing it up as a space problem.
+        if not _is_out_of_space(exc):
+            raise
+        if not _has_rollback():
+            _log(
+                "out of space staging (free="
+                + str(_free_bytes())
+                + " B), nothing left to reclaim: giving up"
+            )
+            raise
+        _log(
+            "out of space staging (free="
+            + str(_free_bytes())
+            + " B): reclaiming the rollback slot and retrying"
+        )
+        _rmtree(PREV_DIR)
+        _clear(PREV_INFO)
+        _cleanup()
+    return _stage(url, files, expect_sha, timeout_s)
+
+
+def _is_out_of_space(exc):
+    """True for ENOSPC(28) and ENOENT(2) - and for nothing else.
+
+    ENOENT is included because a _mkdirs that fails under no space surfaces as
+    open() -> ENOENT, not ENOSPC, which the board's log showed it doing.
+    """
+    code = getattr(exc, "errno", None)
+    if code is None and exc.args:
+        code = exc.args[0]
+    return code in (28, 2)
+
+
 def _stage(url, files, expect_sha, timeout_s, limit=MAX_PACK_BYTES):
     """Stream the pack into :next/, checking it as it arrives. Returns (paths, bytes).
 
@@ -854,35 +937,19 @@ def _update(config):
     # measurement). Note the pack's sha256 is verified once the body is
     # complete, i.e. after :next/ has been written - safe, because :next is
     # discarded on any failure and the live tree is still untouched.
-    try:
-        written, size = _stage(
-            base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
-        )
-    except OSError as exc:
-        # The 768 KB filesystem cannot always hold the live tree AND a full
-        # rollback copy AND the incoming pack at once. A resident :prev costs
-        # about the whole tree, so once free falls under the pack size every
-        # update fails with OSError(28) - the loop that left this board on
-        # 0.1.48 for three days while the service served 0.1.49 (measured
-        # 2026-10-04: live tree 323 KB, pack 255 KB, free 44 KB with the slot
-        # resident). The rollback copy is RECLAIMABLE: _apply rebuilds it from
-        # the current tree as it replaces each file. A board that can never
-        # update is worse than one that gives up a rollback chance, so drop the
-        # slot and retry the stage ONCE. ENOENT (2) is included because a
-        # _mkdirs that fails under no space surfaces as open() -> ENOENT, not
-        # ENOSPC, which the board's log showed it doing.
-        code = getattr(exc, "errno", None)
-        if code is None and exc.args:
-            code = exc.args[0]
-        if code not in (28, 2) or not _has_rollback():
-            raise
-        _log("out of space staging: reclaiming the rollback slot and retrying")
-        _rmtree(PREV_DIR)
-        _clear(PREV_INFO)
-        _cleanup()
-        written, size = _stage(
-            base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
-        )
+    # Free space is logged BEFORE staging, not only on failure: the 2026-10-24
+    # loop was four `OSError: 28` boots with no idea how close the attempt was,
+    # and a pack that is 266 KB against 324 KB free has 65 KB of margin - which
+    # is either obviously fine or obviously fatal once it is written down.
+    _log(
+        "staging " + version + " (pack=" + pack["file"]
+        + ", free=" + str(_free_bytes()) + " B)"
+    )
+    # _stage_or_recover owns the ENOSPC ladder: sweep staging, then reclaim the
+    # rollback slot, then give up with the free figure in the log.
+    written, size = _stage_or_recover(
+        base + "/" + pack["file"], manifest["files"], pack["sha256"], timeout_s
+    )
     # Every file is verified in :next/ - now record the rollback plan for the
     # tree we are about to replace. Nothing is copied: _apply moves each
     # replaced file into :prev as it goes, so :next and :prev are never both

@@ -35,10 +35,12 @@ parity, so the decision is total and testable on the host. See
 # routines.json is a separate table; where they disagree see NOTES.md.
 
 # The routine ids on the wire. The service's reconcile.js derives these from
-# routines.json; here they are the frozen contract. `shoes` has no physical
-# button (the panel has A/B/C plus D for cancel), so it can only be started
-# from the remote - but it is still a routine event like any other.
-ROUTINE_IDS = ("bathtime", "booktime", "cleanup", "shoes")
+# routines.json; here they are the frozen contract. `shoes` and the mealtimes
+# (breakfast / dinner / lunch) have no physical button (the panel has A/B/C plus
+# D for cancel), so they can only be started from the remote - but each is still
+# a routine event like any other.
+ROUTINE_IDS = (
+    "bathtime", "booktime", "breakfast", "cleanup", "dinner", "lunch", "shoes")
 
 # The device events, and nothing else (memo section 3, event-flow.md section 1
 # invariant 4). `reset` is the D button; the rest are the routine starts.

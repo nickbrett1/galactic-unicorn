@@ -189,9 +189,11 @@ def test_event_vocabulary_is_exactly_the_routines_plus_reset():
     # `shoes` is a routine like any other on the wire. It has no physical
     # button, but the board must accept and run it (the remote starts it).
     assert reconcile.DEVICE_EVENTS == (
-        "bathtime", "booktime", "cleanup", "shoes", "reset")
+        "bathtime", "booktime", "breakfast", "cleanup", "dinner", "lunch",
+        "shoes", "reset")
     assert reconcile.ROUTINE_IDS == (
-        "bathtime", "booktime", "cleanup", "shoes")
+        "bathtime", "booktime", "breakfast", "cleanup", "dinner", "lunch",
+        "shoes")
 
 
 # -- the server-side conflict table (mirrored, so both sides agree) -----------

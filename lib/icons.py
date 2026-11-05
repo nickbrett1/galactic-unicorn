@@ -209,6 +209,66 @@ _SHOE = (
 
 SHOE = (_SHOE,)
 
+# The three mealtime routines (routines.json): breakfast, dinner and lunch.
+# Like the shoe, each is a single still frame - the countdown is where the
+# movement is, and a mealtime is a short wait rather than an animation. They
+# share the 10x11 footprint of the other routine icons, so _draw_selection and
+# the pair-fitting rule need no special case.
+
+# Breakfast: a cereal bowl, with two curls of steam above it.
+_BOWL = (
+    "..X....X..",
+    "..X....X..",
+    "..........",
+    "XXXXXXXXXX",
+    "X........X",
+    "X........X",
+    "X........X",
+    ".X......X.",
+    "..XXXXXX..",
+    "..........",
+    "..........",
+)
+
+BOWL = (_BOWL,)
+
+# Dinner: a plate seen from above - a rim and a shallow well, which reads as a
+# plate at a glance where a set of cutlery at this size reads as noise.
+_PLATE = (
+    "..........",
+    "..XXXXXX..",
+    ".X......X.",
+    "X........X",
+    "X........X",
+    "X........X",
+    "X........X",
+    ".X......X.",
+    "..XXXXXX..",
+    "..........",
+    "..........",
+)
+
+PLATE = (_PLATE,)
+
+# Lunch: a sandwich, stacked - rounded top and bottom slices around a filling
+# band. The broken filling row is what stops the three bands reading as a
+# single solid block.
+_SANDWICH = (
+    "..........",
+    "..........",
+    "..XXXXXX..",
+    ".XXXXXXXX.",
+    "XXXXXXXXXX",
+    "X.X.X.X.XX",
+    "XXXXXXXXXX",
+    ".XXXXXXXX.",
+    "..XXXXXX..",
+    "..........",
+    "..........",
+)
+
+SANDWICH = (_SANDWICH,)
+
 ICONS = {
     "bath": BATH,
     "tap": TAP,
@@ -219,6 +279,10 @@ ICONS = {
     "toy-box": BOXES,
     # Shoes On (routines.json): remote-only, but the panel still draws it.
     "shoe": SHOE,
+    # Mealtimes (routines.json): breakfast, dinner and lunch.
+    "bowl": BOWL,
+    "plate": PLATE,
+    "sandwich": SANDWICH,
 }
 
 

@@ -26,6 +26,14 @@
       "end_message": "BOOK TIME!"
     },
     {
+      "id": "breakfast",
+      "label": "Brekkie",
+      "kind": "lead-in",
+      "minutes": 5,
+      "symbol": "bowl",
+      "end_message": "BREAKFAST!"
+    },
+    {
       "id": "cleanup",
       "label": "Cleanup",
       "kind": "lead-in",
@@ -33,6 +41,22 @@
       "button": "C",
       "symbol": "toy-box",
       "end_message": "CLEAN UP!"
+    },
+    {
+      "id": "dinner",
+      "label": "Dinner",
+      "kind": "lead-in",
+      "minutes": 5,
+      "symbol": "plate",
+      "end_message": "DINNER!"
+    },
+    {
+      "id": "lunch",
+      "label": "Lunch",
+      "kind": "lead-in",
+      "minutes": 5,
+      "symbol": "sandwich",
+      "end_message": "LUNCH!"
     },
     {
       "id": "shoes",

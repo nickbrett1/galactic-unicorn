@@ -269,6 +269,26 @@ _SANDWICH = (
 
 SANDWICH = (_SANDWICH,)
 
+# Clothes On (routines.json): a short-sleeved t-shirt, another remote-only
+# routine. The sleeves stick out past the body so the silhouette reads as a
+# garment at a glance rather than a plain block; one still frame like the
+# other lead-in icons.
+_CLOTHES = (
+    "..........",
+    "...XXXX...",
+    ".XXXXXXXX.",
+    "XXXXXXXXXX",
+    "XX.XXXX.XX",
+    "...XXXX...",
+    "...XXXX...",
+    "...XXXX...",
+    "...XXXX...",
+    "...XXXX...",
+    "..........",
+)
+
+CLOTHES = (_CLOTHES,)
+
 ICONS = {
     "bath": BATH,
     "tap": TAP,
@@ -283,6 +303,8 @@ ICONS = {
     "bowl": BOWL,
     "plate": PLATE,
     "sandwich": SANDWICH,
+    # Clothes On (routines.json): remote-only, but the panel still draws it.
+    "clothes": CLOTHES,
 }
 
 

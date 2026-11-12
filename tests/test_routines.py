@@ -142,6 +142,16 @@ def test_only_the_three_physical_buttons_start_routines():
     }
     bound = set(CATALOGUE["buttons"].values())
     assert "shoes" not in bound
+    assert "clothes" not in bound
+
+
+def test_clothes_entry_is_the_remote_one():
+    # Clothes On ships from the remote (symbol `clothes`, artwork a t-shirt);
+    # the panel keeps the shorter label because "Clothes On" is 71 px.
+    assert BY_ID["clothes"]["label"] == "Clothes"
+    assert BY_ID["clothes"]["symbol"] == "clothes"
+    assert BY_ID["clothes"]["end_message"] == "CLOTHES ON!"
+    assert "button" not in BY_ID["clothes"]
 
 
 # -- minimal doubles: nothing here renders ------------------------------------
@@ -214,6 +224,89 @@ def _deliver(engine, now):
 
 
 # -- a buttonless routine, started from the remote ----------------------------
+
+REMOTE_ONLY = ("shoes", "clothes")
+
+
+def test_remote_only_routines_have_no_button():
+    e = _engine()
+    for rid in REMOTE_ONLY:
+        assert e._button_event(rid) is None, rid
+
+
+def test_remote_only_routines_work_from_ambient():
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event(rid)
+        assert _deliver(e, 1000) == [("remote", rid)], rid
+        assert e.state == routine.PROMPT, rid
+        assert e.routine_id() == rid, rid
+
+
+def test_remote_only_routines_use_their_own_routines_json_minutes():
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event(rid)
+        _deliver(e, 1000)
+        e.start_countdown(2000)
+        assert e.state == routine.COUNTDOWN, rid
+        assert e.total_ms == BY_ID[rid]["minutes"] * MIN, rid
+
+
+def test_remote_only_routines_honour_a_requested_length():
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event(rid, 20)
+        _deliver(e, 1000)
+        e.start_countdown(2000)
+        assert e.total_ms == 20 * MIN, rid
+
+
+def test_a_second_remote_only_ask_while_selected_starts_the_countdown():
+    # The PROMPT settle is 3 s; a repeat ask shortcuts it, like pressing the
+    # same button twice.
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event(rid)
+        _deliver(e, 1000)
+        e.post_event(rid)
+        _deliver(e, 2000)
+        assert e.state == routine.COUNTDOWN, rid
+
+
+def test_remote_only_routines_switch_the_prompt():
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event("bathtime")
+        _deliver(e, 1000)
+        e.post_event(rid)
+        _deliver(e, 2000)
+        assert e.state == routine.PROMPT, rid
+        assert e.routine_id() == rid, rid
+
+
+def test_remote_only_routines_are_inert_while_another_countdown_runs():
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event("bathtime")
+        _deliver(e, 1000)
+        e.start_countdown(2000)
+        e.post_event(rid)
+        assert _deliver(e, 3000) == [("remote", rid)], rid
+        assert e.state == routine.COUNTDOWN, rid
+        assert e.routine_id() == "bathtime", rid
+
+
+def test_d_still_cancels_a_remote_only_countdown():
+    for rid in REMOTE_ONLY:
+        e = _engine()
+        e.post_event(rid)
+        _deliver(e, 1000)
+        e.start_countdown(2000)
+        e._handle_events([("press", "D")], 3000)
+        assert e.state == routine.AMBIENT, rid
+        assert e.routine_id() is None, rid
+
 
 def test_shoes_has_no_button_so_the_remote_path_is_the_only_one():
     e = _engine()

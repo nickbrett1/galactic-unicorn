@@ -1212,3 +1212,52 @@ tests the new one for real.
 **Tests.** `tests/test_updater_fetch.py`: the reclaim case now drives all three stages (sweep, then
 slot), and a new case pins the give-up path — two stages, `OSError(28)` re-raised, `free=` and
 "giving up" in `update.log`.
+
+## T9 — 20-minute countdown + "Clothes On" routine (remote-only) — 2026-11-12
+
+**Ask.** Mirror two changes made in `galactic-unicorn-remote`: the countdown selector now offers
+**20** minutes, and there is a new remote-only routine **Clothes On** (`clothes`, artwork 👕).
+The remote gates both on board **0.1.57** (`TWENTY_MINUTES_SINCE`, `CLOTHES_SINCE`).
+
+**Version.** Confirmed **`0.1.57`**. The newest tag before this work is `v0.1.56`, and
+`RELEASING.md` says there is no version file to bump: the release step patches the newest tag
+(`v0.1.57`) and publishes it when this lands on `main`. So the remote's gating constants are
+correct as written and need no adjustment.
+
+**20 minutes (mirrors T6.1/T6.2).**
+
+- `lib/reconcile.py`: `MINUTES_CHOICES` grows from `(1, 2, 3, 5, 10)` to
+  `(1, 2, 3, 5, 10, 20)`; `DEFAULT_MINUTES` stays `5`.
+- Nothing else moves: `valid_minutes` / `requested_minutes` / `effective_minutes` only read
+  `MINUTES_CHOICES`, so `20` is accepted and applied while `15`/`21`/`30` and non-integers still
+  fall back to the routine's own `routines.json` minutes. `minutes` remains per-command data on a
+  `start` only; a physical press still sends no `minutes`, so it keeps the routine's own length.
+- The device-event vocabulary, `gen` ordering, TTL, boot-id clearing and `decide()` are untouched.
+
+**Clothes On (mirrors T7, the "Shoes On" precedent).**
+
+- `routines.json`: a new entry `id: clothes`, panel label `Clothes`, `symbol: clothes`,
+  `minutes: 5`, `end_message: CLOTHES ON!`. **No `button` key and no `buttons` entry** — the
+  physical map is untouched, so no config edit can conjure a fourth cap. It sits after `cleanup`
+  to match the remote catalogue's alphabetical label order (… Cleanup, Clothes On, Dinner …).
+- `lib/reconcile.py`: `ROUTINE_IDS` gains `clothes`, so `event_for_desired` maps a `start` with
+  `routine: "clothes"` to the `clothes` device event instead of dropping it. `DEVICE_EVENTS` is
+  now the eight routines plus `reset`.
+- `lib/routine.py`: no change needed — the `("remote", <id>)` fallback added for `shoes` already
+  dispatches any buttonless known routine with the same rules (start PROMPT from AMBIENT/OFF,
+  switch PROMPT, shortcut when selected, inert during COUNTDOWN/HANDOFF) and carries the requested
+  `minutes`.
+- `lib/icons.py`: a 10x11 t-shirt (`clothes`), one still frame.
+- **Label length.** "Clothes On" is 71 px of `bigfont` on a 53 px panel, so the panel label is
+  `Clothes` (48 px; it fits alone). Icon + label is 60 px, so `_draw_selection` falls back to
+  drawing both at x=0 — the same shipped behaviour as `Cleanup` (62 px). The remote keeps
+  "Clothes On" for the web UI, as it does for "Shoes On"/"Bathtime".
+
+**Tests.** `tests/test_reconcile.py` and `tests/test_routine_minutes.py` add `20` to their accepted
+sets (and reject `21`/`30`/`20.0`), with a dedicated 20-minute acceptance/default-stays-5 test;
+`tests/test_routines.py` pins the catalogue/icon/label-fit invariants (the generic tests pick the
+new entry up automatically), the buttonless invariant for `clothes`, and drives the remote-only
+dispatch path for both `shoes` and `clothes`.
+
+**Not changed.** The physical button map (A/B/C/D), PROMPT/HANDOFF rendering, the `+2 min` hold
+(still only on the three physical routine buttons), MQTT and `lib/remote.py`.

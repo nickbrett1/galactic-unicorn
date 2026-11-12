@@ -35,12 +35,14 @@ parity, so the decision is total and testable on the host. See
 # routines.json is a separate table; where they disagree see NOTES.md.
 
 # The routine ids on the wire. The service's reconcile.js derives these from
-# routines.json; here they are the frozen contract. `shoes` and the mealtimes
-# (breakfast / dinner / lunch) have no physical button (the panel has A/B/C plus
-# D for cancel), so they can only be started from the remote - but each is still
-# a routine event like any other.
+# routines.json; here they are the frozen contract. `shoes`, `clothes` and the
+# mealtimes (breakfast / dinner / lunch) have no physical button (the panel has
+# A/B/C plus D for cancel), so they can only be started from the remote - but
+# each is still a routine event like any other. Kept in id order, which is also
+# the remote catalogue's alphabetical label order.
 ROUTINE_IDS = (
-    "bathtime", "booktime", "breakfast", "cleanup", "dinner", "lunch", "shoes")
+    "bathtime", "booktime", "breakfast", "cleanup", "clothes", "dinner",
+    "lunch", "shoes")
 
 # The device events, and nothing else (memo section 3, event-flow.md section 1
 # invariant 4). `reset` is the D button; the rest are the routine starts.
@@ -56,7 +58,7 @@ DESIRED_ACTIONS = (ACTION_START, ACTION_CANCEL, ACTION_NONE)
 # The optional remote-chosen countdown length (device-protocols.md section 3):
 # an INTEGER number of minutes, one of these, absent meaning "use the routine's
 # own". The unit is minutes because that is what routines.json already uses.
-MINUTES_CHOICES = (1, 2, 3, 5, 10)
+MINUTES_CHOICES = (1, 2, 3, 5, 10, 20)
 DEFAULT_MINUTES = 5
 
 # The panel's own states as REPORTED BY THE BOARD. AMBIENT, PROMPT, COUNTDOWN
@@ -106,7 +108,7 @@ def banner_for(message, state):
 # the engine (lib/routine.py) only carries out the answer.
 
 def valid_minutes(value):
-    """True if `value` is one of the offered remote lengths (1|2|3|5|10).
+    """True if `value` is one of the offered remote lengths (1|2|3|5|10|20).
 
     `bool` is rejected explicitly. In Python `True == 1`, so without this a
     JSON `true` would pass as a one-minute countdown - a value the service
@@ -124,7 +126,7 @@ def requested_minutes(desired):
 
     None means "no request": the board falls back to the routine's own
     `minutes`, exactly as if the field were absent. A `cancel`/`none` slot, a
-    missing field, a non-integer, or any value outside 1|2|3|5|10 all give None.
+    missing field, a non-integer, or any value outside 1|2|3|5|10|20 all give None.
     The server validates too; this is the board's defensive half, so an
     out-of-range value cannot change a countdown.
     """
@@ -139,7 +141,7 @@ def requested_minutes(desired):
 def effective_minutes(requested, routine_minutes):
     """The length a countdown runs for, in minutes.
 
-    A valid `requested` (1|2|3|5|10) wins; otherwise the routine's own `minutes`
+    A valid `requested` (1|2|3|5|10|20) wins; otherwise the routine's own `minutes`
     from routines.json; otherwise `DEFAULT_MINUTES`. With no request this is
     exactly the old behaviour, so a physical press and an old remote are
     identical by construction.

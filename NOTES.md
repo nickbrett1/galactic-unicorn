@@ -1261,3 +1261,36 @@ dispatch path for both `shoes` and `clothes`.
 
 **Not changed.** The physical button map (A/B/C/D), PROMPT/HANDOFF rendering, the `+2 min` hold
 (still only on the three physical routine buttons), MQTT and `lib/remote.py`.
+
+## T10 — fix: a long label is no longer drawn under its icon (2026-11-14)
+
+**Ask.** "The clothes on text is difficult to read, the C in particular bleeds into other letters."
+
+**Cause.** Not the C glyph and not the letter gap: the *frame*. `_draw_selection`
+centred the icon and the label as one group, and when the pair was wider than the
+53 px panel it fell back to `icon_x = text_x = 0` — drawing the word straight over
+the artwork. "Clothes" (48 px) starts at x=0, so the t-shirt's 10 px of ink landed
+on the C, L and O. `Cleanup` (62 px), `Brekkie` (60 px) and `Dinner` (55 px) hit the
+same path. T9 recorded the overlap as "the same shipped behaviour as `Cleanup`";
+it was a smudge, not a layout.
+
+**Fix.** `lib/routine.py` grows `selection_layout(panel_w, icon_w, label)`, the one
+place the choice is made. If icon + gap + word fits, it returns the pair's shared
+centring (unchanged for Bath, Book, Shoes, Lunch). If it does not, it returns
+`icon_x = None` and the word centred on its own, full height, usual 1 px gap —
+`_draw_selection` then skips the icon. The label is the payload; the icon is
+decoration, and four routines never had room for both.
+
+**Effect.** Clothes starts at x=2 and reads C-L-O-T-H-E-S. Cleanup, Brekkie and
+Dinner likewise show the word alone. Bath, Book, Shoes and Lunch are pixel-identical
+to before. PROMPT and HANDOFF share `_draw_selection`, so the green payoff frame
+gets the same fix for free.
+
+**Tests.** `tests/test_routines.py`: `test_selection_layout_places_the_pair_as_one_centred_group`
+pins the fitting case (icon then label, group centred, nothing past the edge), and
+`test_long_labels_drop_the_icon_and_stay_inside_the_panel` walks every routine and
+asserts the word always fits the panel and that an icon is dropped exactly when the
+pair does not fit. The old comment claiming the x=0 fallback was normal is gone.
+
+**Not changed.** `routines.json` (labels still mirror the remote catalogue),
+glyphs, `GAP`, the font geometry, the button map, timing and MQTT.

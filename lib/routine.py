@@ -38,6 +38,24 @@ def _scale(rgb, f):
     return (int(rgb[0] * f), int(rgb[1] * f), int(rgb[2] * f))
 
 
+def selection_layout(panel_w, icon_w, label):
+    """Where the icon and the label go on the selection screen.
+
+    Returns ``(icon_x, text_x)``; ``icon_x`` is ``None`` when the pair will not
+    fit side by side and the icon must be dropped. Drawing both anyway would
+    put the label *under* the icon: "Clothes" (48 px) plus its 10 px t-shirt is
+    60 px on a 53 px panel, so its C came out as a smear of icon ink. The label
+    is the thing that has to be read, so it wins the space and is centred on
+    its own - at full height, with the same 1 px gap between glyphs.
+    """
+    text_w = bigfont.text_width(label)
+    span = icon_w + ICON_GAP + text_w
+    if icon_w > 0 and 0 < span <= panel_w:
+        icon_x = (panel_w - span) // 2
+        return icon_x, icon_x + icon_w + ICON_GAP
+    return None, max(0, (panel_w - text_w) // 2)
+
+
 def _serpentine_path():
     """Every LED, in the order the countdown lights them.
 
@@ -291,6 +309,10 @@ class Engine:
         margin top or bottom. Used by PROMPT and by HANDOFF (which is the same
         picture in green), so "it flashes the icon too" needs no second
         drawing routine.
+
+        When the icon and the word do not fit side by side, the icon is left
+        out and the word is centred on its own (`selection_layout`): a label
+        drawn over the icon is not a sign, it is a smudge.
         """
         d = self.display
         d.clear()
@@ -300,14 +322,9 @@ class Engine:
         routine = self.routine
         label = routine.get("label", "")
         symbol = routine.get("symbol", "bath")
-        icon_x = 0
-        text_x = 0
-        width = icons.icon_width(symbol)
-        span = width + ICON_GAP + bigfont.text_width(label)
-        if 0 < span <= d.width:
-            icon_x = (d.width - span) // 2
-            text_x = icon_x + width + ICON_GAP
-        icons.draw_icon(d, symbol, icon_x, 0, age_ms, rgb=rgb)
+        icon_x, text_x = selection_layout(d.width, icons.icon_width(symbol), label)
+        if icon_x is not None:
+            icons.draw_icon(d, symbol, icon_x, 0, age_ms, rgb=rgb)
         bigfont.draw_text(d, text_x, 0, label, rgb=rgb)
         d.update()
 

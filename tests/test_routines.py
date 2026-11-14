@@ -118,10 +118,9 @@ def test_every_icon_frame_is_11_rows_and_ten_or_more_wide():
 
 def test_every_label_fits_the_panel_on_its_own():
     # A label wider than the panel is clipped, so no routine may have one.
-    # (The *pair* does not always fit: "Cleanup" + its icon is 62 px on a 53 px
-    # panel and _draw_selection falls back to drawing both at x=0. That is the
-    # shipped behaviour for the third routine, not a rule to copy - see the
-    # next test for the pair this feature adds.)
+    # The *pair* need not fit: "Clothes" + its icon is 60 px on a 53 px panel,
+    # and selection_layout then drops the icon rather than drawing the label
+    # under it (see test_long_labels_drop_the_icon).
     for r in ROUTINES:
         assert 0 < bigfont.text_width(r["label"]) <= PANEL_W, r["id"]
 
@@ -129,6 +128,35 @@ def test_every_label_fits_the_panel_on_its_own():
 def test_shoes_icon_and_label_fit_together():
     span = icons.icon_width("shoe") + ICON_GAP + bigfont.text_width("Shoes")
     assert 0 < span <= PANEL_W, span
+
+
+def test_selection_layout_places_the_pair_as_one_centred_group():
+    icon_w = icons.icon_width("shoe")
+    icon_x, text_x = routine.selection_layout(PANEL_W, icon_w, "Shoes")
+    assert icon_x is not None
+    assert text_x == icon_x + icon_w + ICON_GAP
+    span = icon_w + ICON_GAP + bigfont.text_width("Shoes")
+    assert icon_x == (PANEL_W - span) // 2
+    assert text_x + bigfont.text_width("Shoes") <= PANEL_W
+
+
+def test_long_labels_drop_the_icon_and_stay_inside_the_panel():
+    # The regression this fixes: "Clothes" (48 px) under a 10 px icon drawn at
+    # x=0, which buried the C in t-shirt ink so the word read as a smudge.
+    dropped = []
+    for r in ROUTINES:
+        label, icon_w = r["label"], icons.icon_width(r["symbol"])
+        span = icon_w + ICON_GAP + bigfont.text_width(label)
+        icon_x, text_x = routine.selection_layout(PANEL_W, icon_w, label)
+        assert text_x >= 0, r["id"]
+        assert text_x + bigfont.text_width(label) <= PANEL_W, r["id"]
+        if span > PANEL_W:
+            dropped.append(r["id"])
+            # No icon ink anywhere near the label: the word is alone.
+            assert icon_x is None, r["id"]
+        else:
+            assert icon_x is not None, r["id"]
+    assert "clothes" in dropped, dropped
 
 
 def test_only_the_three_physical_buttons_start_routines():

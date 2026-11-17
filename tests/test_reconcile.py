@@ -426,9 +426,9 @@ def test_build_report_reuse_clears_the_message_id():
 # pinned here rather than on a flashed board.
 
 def test_valid_minutes_accepts_only_the_offered_lengths():
-    for value in (1, 2, 3, 5, 10, 20):
+    for value in (1, 2, 3, 5, 10, 15, 20):
         assert reconcile.valid_minutes(value) is True
-    for value in (0, 4, 6, 7, 15, 21, 30, -1, -3, 60, None, "3", "10", "20",
+    for value in (0, 4, 6, 7, 21, 30, -1, -3, 60, None, "3", "10", "20",
                   3.0, 5.0, 10.0, 20.0):
         assert reconcile.valid_minutes(value) is False
 
@@ -444,7 +444,7 @@ def test_requested_minutes_reads_a_valid_start_request():
     slot = _slot(19, "start", "bathtime")
     slot["minutes"] = 3
     assert reconcile.requested_minutes(slot) == 3
-    for value in (1, 2, 3, 5, 10, 20):
+    for value in (1, 2, 3, 5, 10, 15, 20):
         slot["minutes"] = value
         assert reconcile.requested_minutes(slot) == value
 
@@ -478,6 +478,17 @@ def test_requested_minutes_reads_the_new_twenty_minute_choice():
     assert reconcile.DEFAULT_MINUTES == 5
 
 
+def test_requested_minutes_reads_the_new_fifteen_minute_choice():
+    # T11: the remote now offers 15, so the board must accept and apply it
+    # rather than falling back to the routine's own five minutes. The default
+    # must not move with it.
+    slot = _slot(19, "start", "bathtime")
+    slot["minutes"] = 15
+    assert reconcile.requested_minutes(slot) == 15
+    assert reconcile.effective_minutes(15, 5) == 15
+    assert reconcile.DEFAULT_MINUTES == 5
+
+
 def test_requested_minutes_is_none_when_the_field_is_absent():
     # An old remote (no field) means "use the routine's own minutes", exactly
     # like a physical press - this is the default-when-absent rule.
@@ -485,7 +496,7 @@ def test_requested_minutes_is_none_when_the_field_is_absent():
 
 
 def test_requested_minutes_refuses_out_of_range_and_garbage():
-    for value in (0, 4, 6, 7, 15, 21, 30, -1, None, "3", "10", "20",
+    for value in (0, 4, 6, 7, 21, 30, -1, None, "3", "10", "20",
                   3.0, 10.0, 20.0, True):
         slot = _slot(19, "start", "bathtime")
         slot["minutes"] = value
@@ -506,6 +517,7 @@ def test_effective_minutes_request_wins_over_the_routine():
     assert reconcile.effective_minutes(3, 5) == 3
     assert reconcile.effective_minutes(5, 5) == 5
     assert reconcile.effective_minutes(10, 5) == 10
+    assert reconcile.effective_minutes(15, 5) == 15
     assert reconcile.effective_minutes(20, 5) == 20
     # Even against a routine configured for something else.
     assert reconcile.effective_minutes(3, 9) == 3
@@ -519,8 +531,8 @@ def test_effective_minutes_no_request_uses_the_routine():
 
 
 def test_effective_minutes_invalid_request_falls_back_to_the_routine():
-    # 4/6/7/15/21 are just outside the offered set; non-integers never qualify.
-    for value in (0, 4, 6, 7, 15, 21, 30, -1, True, "3", "10", "20",
+    # 4/6/7/21 are just outside the offered set; non-integers never qualify.
+    for value in (0, 4, 6, 7, 21, 30, -1, True, "3", "10", "20",
                   3.0, 10.0, 20.0):
         assert reconcile.effective_minutes(value, 4) == 4
 

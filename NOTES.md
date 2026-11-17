@@ -1294,3 +1294,30 @@ pair does not fit. The old comment claiming the x=0 fallback was normal is gone.
 
 **Not changed.** `routines.json` (labels still mirror the remote catalogue),
 glyphs, `GAP`, the font geometry, the button map, timing and MQTT.
+
+## T11 — 15-minute countdown (remote-only choice) — 2026-11-17
+
+**Ask.** Mirror a change made in `galactic-unicorn-remote`: the countdown selector
+now offers **15** minutes. The remote gates it on board **0.1.59**
+(`FIFTEEN_MINUTES_SINCE`) — the release after `0.1.58`, whose tag predates this
+work, so the gate is correct as written.
+
+**15 minutes (mirrors T6.1/T6.2/T9).**
+
+- `lib/reconcile.py`: `MINUTES_CHOICES` grows from `(1, 2, 3, 5, 10, 20)` to
+  `(1, 2, 3, 5, 10, 15, 20)`; `DEFAULT_MINUTES` stays `5`.
+- Nothing else moves: `valid_minutes` / `requested_minutes` / `effective_minutes`
+  only read `MINUTES_CHOICES`, so `15` is accepted and applied while `4`/`6`/`7`/
+  `21`/`30` and non-integers still fall back to the routine's own `routines.json`
+  minutes. `minutes` remains per-command data on a `start` only; a physical press
+  still sends no `minutes`, so it keeps the routine's own length.
+- The device-event vocabulary, `gen` ordering, TTL, boot-id clearing and
+  `decide()` are untouched.
+
+**Tests.** `tests/test_reconcile.py` and `tests/test_routine_minutes.py` add `15`
+to their accepted sets (and stop listing it as rejected), with a dedicated
+15-minute acceptance/default-stays-5 test and `effective_minutes(15, 5) == 15`
+pinned in the request-wins test.
+
+**Not changed.** `routines.json`, `lib/routine.py`, glyphs, the button map,
+timing and MQTT.
